@@ -1,0 +1,9 @@
+node_modules/
+sample-data.json
+serve.js
+sim.js
+make_sample.js
+*.log
+.DS_Store
+sample-output-*.xlsx
+~$*
