@@ -1,6 +1,7 @@
 import json, re
 engine = open('engine.js', encoding='utf8').read()
 engine = engine.split("if (typeof module")[0]
+writer = open('xlsx-writer.js', encoding='utf8').read().split("if (typeof module")[0]
 
 runner = """
 const input = $input.first().json;
@@ -18,6 +19,15 @@ const summary = {
   Evidence: 'A flag means look closer, not that the company is bad. Source: screener.in. Not investment advice.',
 };
 return [summary].concat(out.rows).map((r) => ({ json: r }));
+"""
+
+excel = """
+const rows = $input.all().map((i) => i.json);
+const ticker = $('Parse ticker').first().json.ticker;
+const buf = buildXlsx(rows);
+const fileName = 'red-flag-screen-' + ticker + '.xlsx';
+const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+return [{ json: { fileName }, binary: { data: await this.helpers.prepareBinaryData(buf, fileName, mime) } }];
 """
 
 parse = """
@@ -55,8 +65,7 @@ nodes = [
  n("Show error", "n8n-nodes-base.form", 1, {
    "operation": "completion", "completionTitle": "Could not screen this company",
    "completionMessage": "={{ $json.error }}", "options": {}}, [1100, -120], id="rf-0006", webhookId="c2d4e6f8-0006-4a00-8000-0000000000bb"),
- n("Make Excel file", "n8n-nodes-base.convertToFile", 1.1, {
-   "operation": "xlsx", "binaryPropertyName": "data", "options": {"fileName": "red-flag-screen.xlsx", "sheetName": "Red flags"}}, [1100, 120], id="rf-0007"),
+ n("Make Excel file", "n8n-nodes-base.code", 2, {"jsCode": (writer + excel).strip()}, [1100, 120], id="rf-0007"),
  n("Download Excel", "n8n-nodes-base.form", 1, {
    "operation": "completion", "completionTitle": "Your red-flag screen is ready",
    "respondWith": "returnBinary", "inputDataFieldName": "data", "options": {}}, [1320, 120], id="rf-0008", webhookId="c2d4e6f8-0008-4a00-8000-0000000000cc"),
