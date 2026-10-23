@@ -1,7 +1,7 @@
-// Red-flag screener V1 engine. Pure JS, no dependencies, so the same body runs in an n8n Code node.
+// Red-flag screener V2 engine. Pure JS, no dependencies, so the same body runs in an n8n Code node.
 // Input: screener.in company page HTML. Output: { company, years, rows[] } with one row per check.
 
-const SECTIONS = ['profit-loss', 'balance-sheet', 'cash-flow', 'ratios'];
+const SECTIONS = ['profit-loss', 'balance-sheet', 'cash-flow', 'ratios', 'quarters', 'shareholding'];
 
 function cleanText(s) {
   return s.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').replace(/\s*\+\s*$/, '').trim();
@@ -31,8 +31,54 @@ function parseSection(html, id) {
   return { years, rows };
 }
 
+// Top ratios list: { 'Stock P/E': [5.51], 'High / Low': [189, 125], ... }
+function parseTopRatios(html) {
+  const ul = html.match(/<ul id="top-ratios"[\s\S]*?<\/ul>/);
+  const out = {};
+  if (!ul) return out;
+  for (const li of ul[0].matchAll(/<li[\s\S]*?<\/li>/g)) {
+    const name = (li[0].match(/<span class="name">([\s\S]*?)<\/span>/) || [])[1];
+    if (name) out[cleanText(name)] = [...li[0].matchAll(/<span class="number">([\s\S]*?)<\/span>/g)].map((m) => toNumber(m[1]));
+  }
+  return out;
+}
+
+// Extra sources arrive as raw text from separate HTTP calls (screener chart + peers APIs, NSE pledge API).
+// Anything missing or malformed stays null so the dependent checks report "Not tested".
+function parseExtras(extras) {
+  const x = extras || {};
+  const json = (t) => { try { return typeof t === 'string' ? JSON.parse(t) : null; } catch (e) { return null; } };
+  const dataset = (j, metric) => (j && Array.isArray(j.datasets) ? j.datasets.find((d) => d.metric === metric && Array.isArray(d.values) && d.values.length) : null);
+  const out = { medianPe: null, priceChange: null, peerPe: [], pledge: null, pledgeDate: null };
+
+  const med = dataset(json(x.pe), 'Median PE');
+  if (med) out.medianPe = Number(med.values[med.values.length - 1][1]);
+
+  const px = dataset(json(x.price), 'Price');
+  if (px && px.values.length > 1) {
+    const first = Number(px.values[0][1]), last = Number(px.values[px.values.length - 1][1]);
+    if (first > 0 && Number.isFinite(last)) out.priceChange = last / first - 1;
+  }
+
+  const peers = typeof x.peers === 'string' ? x.peers : '';
+  const heads = [...(peers.match(/<tr[^>]*>(?:(?!<\/tr>)[\s\S])*<th[\s\S]*?<\/tr>/) || [''])[0].matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => cleanText(m[1]));
+  const col = heads.indexOf('P/E');
+  if (col >= 0) {
+    for (const tr of peers.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)) {
+      const cells = [...tr[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) => cleanText(m[1]));
+      const v = /^\d+\.$/.test(cells[0] || '') ? toNumber(cells[col] || '') : null;
+      if (v !== null && v > 0) out.peerPe.push(v);
+    }
+  }
+
+  const pl = json(x.pledge);
+  const row = pl && Array.isArray(pl.data) ? pl.data[0] : null;
+  if (row) { out.pledge = toNumber(String(row.percPromoterShares)); out.pledgeDate = row.shp; }
+  return out;
+}
+
 function parseCompany(html) {
-  const out = { company: (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1], data: {} };
+  const out = { company: (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/) || [])[1], data: {}, ratios: parseTopRatios(html) };
   out.company = out.company ? cleanText(out.company) : 'Unknown';
   for (const id of SECTIONS) out.data[id] = parseSection(html, id);
   return out;
@@ -53,6 +99,14 @@ const LABELS = {
   wcDays: ['ratios', 'Working Capital Days'], roce: ['ratios', 'ROCE %'],
 };
 
+const QLABELS = {
+  sales: ['quarters', 'Sales'], opm: ['quarters', 'OPM %'], otherInc: ['quarters', 'Other Income'],
+  pbt: ['quarters', 'Profit before tax'], np: ['quarters', 'Net Profit'],
+};
+const SHLABELS = {
+  promoters: ['shareholding', 'Promoters'], fii: ['shareholding', 'FIIs'], dii: ['shareholding', 'DIIs'], pub: ['shareholding', 'Public'],
+};
+
 // Label matching tolerates trailing text, e.g. "EPS in Rs" vs "EPS in Rs".
 function findRow(section, label) {
   if (!section) return null;
@@ -60,13 +114,10 @@ function findRow(section, label) {
   return key ? { years: section.years, values: section.rows[key] } : null;
 }
 
-// Aligns every series on the annual year labels of the profit-loss table.
-function buildSeries(parsed) {
-  const pl = parsed.data['profit-loss'];
-  if (!pl) return null;
-  const years = pl.years.filter((y) => ANNUAL.test(y));
+// Aligns every labelled series on the given period labels.
+function alignOn(parsed, years, labels) {
   const s = {};
-  for (const [name, [sec, label]] of Object.entries(LABELS)) {
+  for (const [name, [sec, label]] of Object.entries(labels)) {
     const row = findRow(parsed.data[sec], label);
     s[name] = years.map((y) => {
       if (!row) return null;
@@ -74,7 +125,21 @@ function buildSeries(parsed) {
       return i < 0 ? null : row.values[i];
     });
   }
-  return { years, s };
+  return s;
+}
+
+// Annual series align on the profit-loss year labels; quarterly and shareholding series on their own period labels.
+function buildSeries(parsed) {
+  const pl = parsed.data['profit-loss'];
+  if (!pl) return null;
+  const years = pl.years.filter((y) => ANNUAL.test(y));
+  const periods = (id) => (parsed.data[id] ? parsed.data[id].years.filter((y) => ANNUAL.test(y)) : []);
+  return {
+    years, s: alignOn(parsed, years, LABELS),
+    q: alignOn(parsed, periods('quarters'), QLABELS),
+    sh: alignOn(parsed, periods('shareholding'), SHLABELS),
+    ratios: parsed.ratios,
+  };
 }
 
 // ---- helpers over a series (index 0 = latest year) ----
@@ -108,7 +173,7 @@ function ratioSeries(num, den) {
 const sumKnown = (arr) => (lastN(arr, arr.length).every(Number.isFinite) ? sum(arr) : null);
 
 // ---- checks: each returns null (cannot test), or { flag, ev } ----
-function buildChecks(s) {
+function buildChecks({ s, q, sh, ratios }, x) {
   const equity = s.eqCap.map((e, i) => (has(e, s.reserves[i]) ? e + s.reserves[i] : null));
   const de = ratioSeries(s.borrow, equity);
   const checks = [];
@@ -334,18 +399,114 @@ function buildChecks(s) {
     const avg = sum(n) / 5;
     return { flag: avg > 0 && n[4] > avg * 1.5, ev: 'Net profit ' + f1(n[4]) + ' vs 5-year average ' + f1(avg) };
   });
+
+  // G. Ownership (quarterly shareholding table). Percentage-point changes are rounded to avoid float noise at the threshold.
+  const pts = (v) => Math.round(v * 100) / 100;
+  const holding = (arr) => lastN(arr, 12);
+  const span = (arr) => {
+    const h = holding(arr);
+    return h.length < 9 || !h.every(Number.isFinite) ? null : h;
+  };
+  add('G1', 'Ownership', 'High', 'Promoter holding down 5+ points over the last 12 quarters', () => {
+    const h = span(sh.promoters);
+    return h ? { flag: pts(h[0] - h[h.length - 1]) >= 5, ev: 'Promoter holding ' + h[0] + '% to ' + h[h.length - 1] + '% over ' + h.length + ' quarters' } : null;
+  });
+  add('G2', 'Ownership', 'Medium', 'Promoter holding falling 4 quarters in a row', () => {
+    const p = lastN(sh.promoters, 5);
+    return p.length < 5 || !p.every(Number.isFinite) ? null : { flag: fallingRun(sh.promoters, 4), ev: 'Promoter holding ' + p.join('%, ') + '%' };
+  });
+  add('G3', 'Ownership', 'Medium', 'Promoter holding below 25% (weak control, or a professionally managed company)', () => {
+    const p = at(sh.promoters, 0);
+    return has(p) ? { flag: p < 25, ev: 'Promoter holding ' + p + '%' } : null;
+  });
+  add('G4', 'Ownership', 'Medium', 'FII and DII holding both falling 3 quarters in a row', () => {
+    const f = lastN(sh.fii, 4), d = lastN(sh.dii, 4);
+    if (f.length < 4 || !f.every(Number.isFinite) || !d.every(Number.isFinite)) return null;
+    return { flag: fallingRun(sh.fii, 3) && fallingRun(sh.dii, 3), ev: 'FII ' + f.join('%, ') + '%; DII ' + d.join('%, ') + '%' };
+  });
+  add('G5', 'Ownership', 'Low', 'Public holding up 5+ points over the last 12 quarters (shares moving to retail)', () => {
+    const h = span(sh.pub);
+    return h ? { flag: pts(h[h.length - 1] - h[0]) >= 5, ev: 'Public holding ' + h[0] + '% to ' + h[h.length - 1] + '% over ' + h.length + ' quarters' } : null;
+  });
+
+  add('G6', 'Ownership', 'High', 'More than 10% of promoter shares pledged (NSE disclosure)', () => {
+    return has(x.pledge) ? { flag: x.pledge > 10, ev: x.pledge + '% of promoter shares pledged as of ' + x.pledgeDate } : null;
+  });
+
+  // H. Valuation and market signals (top ratios block)
+  const top = (name, k) => (ratios && ratios[name] ? ratios[name][k || 0] : null);
+  add('H1', 'Valuation', 'Medium', 'Price to book above 5 with ROE under 12%', () => {
+    const price = top('Current Price'), bv = top('Book Value'), roe = top('ROE');
+    if (!has(price, bv, roe) || bv <= 0) return null;
+    const pb = price / bv;
+    return { flag: pb > 5 && roe < 12, ev: 'Price/book ' + (Math.round(pb * 10) / 10) + 'x, ROE ' + roe + '%' };
+  });
+  add('H2', 'Valuation', 'Medium', 'Dividend yield above 8% with payout above 100% (unsustainable)', () => {
+    const y = top('Dividend Yield'), p = at(s.payout, 0);
+    return has(y, p) ? { flag: y > 8 && p > 100, ev: 'Dividend yield ' + y + '%, payout ' + p + '% of profit' } : null;
+  });
+  add('H3', 'Valuation', 'Low', 'Price more than 30% below the 52-week high', () => {
+    const price = top('Current Price'), high = top('High / Low', 0);
+    if (!has(price, high) || high <= 0) return null;
+    return { flag: 1 - price / high > 0.3, ev: 'Price ' + price + ' vs 52-week high ' + high + ' (' + pct(1 - price / high) + ' below)' };
+  });
+  add('H4', 'Valuation', 'Medium', 'P/E more than 3x the 3-year profit growth rate (PEG above 3)', () => {
+    const pe = top('Stock P/E'), g = cagr(s.np, 3);
+    if (!has(pe, g) || pe <= 0 || g <= 0) return null;
+    return { flag: pe / (g * 100) > 3, ev: 'P/E ' + pe + ' vs profit growth ' + pct(g) + ' a year (PEG ' + (Math.round(pe / (g * 100) * 10) / 10) + ')' };
+  });
+
+  add('H5', 'Valuation', 'Medium', 'P/E more than 2x its own 5-year median', () => {
+    const pe = top('Stock P/E');
+    if (!has(pe, x.medianPe) || pe <= 0 || x.medianPe <= 0) return null;
+    return { flag: pe > 2 * x.medianPe, ev: 'P/E ' + pe + ' vs 5-year median ' + x.medianPe };
+  });
+  add('H6', 'Valuation', 'Low', 'Price down 20%+ over the past year while the latest annual net profit rose', () => {
+    const n0 = at(s.np, 0), n1 = at(s.np, 1);
+    if (!has(x.priceChange, n0, n1)) return null;
+    return { flag: Math.round(x.priceChange * 10000) / 10000 <= -0.2 && n0 > n1, ev: 'Price ' + pct(x.priceChange) + ' in a year; net profit ' + f1(n1) + ' to ' + f1(n0) };
+  });
+  add('H7', 'Valuation', 'Medium', 'P/E more than 50% above the median of screener.in peers', () => {
+    const pe = top('Stock P/E');
+    if (!has(pe) || pe <= 0 || x.peerPe.length < 4) return null;
+    const sorted = [...x.peerPe].sort((a, b) => a - b), m = sorted.length / 2;
+    const med = sorted.length % 2 ? sorted[Math.floor(m)] : (sorted[m - 1] + sorted[m]) / 2;
+    return { flag: pe > 1.5 * med, ev: 'P/E ' + pe + ' vs peer median ' + (Math.round(med * 10) / 10) + ' (' + x.peerPe.length + ' peers)' };
+  });
+
+  // Q. Latest quarter vs the same quarter a year earlier (removes seasonality)
+  add('Q1', 'Quarterly', 'Medium', 'Operating margin down 5+ points vs the same quarter last year', () => {
+    const a = at(q.opm, 0), b = at(q.opm, 4);
+    return has(a, b) ? { flag: pts(a - b) <= -5, ev: 'OPM ' + b + '% to ' + a + '%' } : null;
+  });
+  add('Q2', 'Quarterly', 'Medium', 'Net profit down 20%+ vs the same quarter last year', () => {
+    const a = at(q.np, 0), b = at(q.np, 4);
+    if (!has(a, b) || b <= 0) return null;
+    return { flag: Math.round((a / b - 1) * 10000) / 10000 <= -0.2, ev: 'Quarterly net profit ' + f1(b) + ' to ' + f1(a) + ' (' + pct(a / b - 1) + ')' };
+  });
+  add('Q3', 'Quarterly', 'Medium', 'Other income above 20% of the latest quarter\'s profit before tax', () => {
+    const o = at(q.otherInc, 0), p = at(q.pbt, 0);
+    if (!has(o, p) || p <= 0) return null;
+    return { flag: o / p > 0.2, ev: 'Other income is ' + pct(o / p) + ' of quarterly PBT' };
+  });
+  add('Q4', 'Quarterly', 'Low', 'Year-on-year sales growth slowing 3 quarters in a row', () => {
+    const base = lastN(q.sales, 8), growth = [];
+    if (base.length < 8 || !base.every((x) => Number.isFinite(x) && x > 0)) return null;
+    for (let i = 4; i < 8; i++) growth.push(base[i] / base[i - 4] - 1);
+    return { flag: growth.every((g, i) => i === 0 || g < growth[i - 1]), ev: 'Sales growth ' + growth.map(pct).join(', ') };
+  });
   return checks;
 }
 
-function runChecks(html) {
+function runChecks(html, extras) {
   const parsed = parseCompany(html);
   if (!parsed.data['profit-loss']) return { error: 'Could not find financial tables. Check the ticker.' };
   if (!findRow(parsed.data['profit-loss'], 'Operating Profit')) {
-    return { error: 'This looks like a bank, NBFC or insurer. V1 only supports non-financial companies.' };
+    return { error: 'This looks like a bank, NBFC or insurer. V2 only supports non-financial companies.' };
   }
   const built = buildSeries(parsed);
   if (!built || built.years.length < 6) return { error: 'Not enough annual history (need at least 6 years).' };
-  const rows = buildChecks(built.s).map((c) => {
+  const rows = buildChecks(built, parseExtras(extras)).map((c) => {
     let res = null;
     try { res = c.fn(); } catch (e) { res = null; }
     const status = res === null ? 'Not tested' : res.flag ? 'FLAG' : 'OK';
