@@ -1,8 +1,8 @@
 # Red-flag screener (n8n)
 
-Type a ticker. This n8n workflow pulls 12 years of statements, 12 quarters and the shareholding pattern from
-screener.in, runs 61 checks, and downloads an Excel report. Every check is marked FLAG, OK or Not tested, with
-the numbers behind it.
+Type a ticker. This n8n workflow pulls 12 years of statements, 12 quarters and the shareholding pattern from screener.in,
+runs 61 checks on earnings quality, cash flow, working capital, leverage, returns, margins, ownership, valuation
+and the latest quarter, and downloads an Excel report. Every check is marked FLAG, OK or Not tested, with the numbers behind it.
 
 ![Indian Oil vs Vodafone Idea](docs/side-by-side.png)
 
