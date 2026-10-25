@@ -1,0 +1,6 @@
+{
+  "locked": "2026-10-25, before any scoring run. IDEA and IOC removed at Aarav's request (already used in earlier tests).",
+  "GOOD": ["HINDUNILVR", "NESTLEIND", "ASIANPAINT", "PIDILITIND", "PAGEIND"],
+  "MODERATE": ["TATASTEEL", "HINDALCO", "ASHOKLEY", "BHARTIARTL", "ONGC"],
+  "BAD": ["JPASSOCIAT", "RPOWER", "RELINFRA", "SUZLON", "HCC"]
+}

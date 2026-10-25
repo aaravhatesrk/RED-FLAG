@@ -1,0 +1,6 @@
+{
+  "locked": "2026-10-25, round 2, approved by Aarav before any scoring. No company reused from round 1; IOC and IDEA excluded.",
+  "GOOD": ["BRITANNIA", "TITAN", "DABUR", "BAJAJ-AUTO", "COLPAL", "MARICO"],
+  "MODERATE": ["SAIL", "BHEL", "NTPC", "JSWSTEEL", "TATAPOWER", "UPL"],
+  "BAD": ["JPPOWER", "UNITECH", "RCOM", "GTLINFRA", "SPICEJET", "SINTEX"]
+}

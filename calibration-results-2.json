@@ -1,0 +1,200 @@
+[
+  {
+    "label": "GOOD",
+    "ticker": "BRITANNIA",
+    "company": "Britannia Industries Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 2.5,
+    "flags": 2,
+    "highFlags": 0,
+    "coverage": 98
+  },
+  {
+    "label": "GOOD",
+    "ticker": "TITAN",
+    "company": "Titan Company Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 18.6,
+    "flags": 9,
+    "highFlags": 4,
+    "coverage": 98
+  },
+  {
+    "label": "GOOD",
+    "ticker": "DABUR",
+    "company": "Dabur India Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 9.3,
+    "flags": 7,
+    "highFlags": 0,
+    "coverage": 98
+  },
+  {
+    "label": "GOOD",
+    "ticker": "BAJAJ-AUTO",
+    "company": "Bajaj Auto Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 21.2,
+    "flags": 12,
+    "highFlags": 2,
+    "coverage": 98
+  },
+  {
+    "label": "GOOD",
+    "ticker": "MARICO",
+    "company": "Marico Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 8.5,
+    "flags": 5,
+    "highFlags": 1,
+    "coverage": 98
+  },
+  {
+    "label": "MODERATE",
+    "ticker": "SAIL",
+    "company": "Steel Authority of India Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 3.4,
+    "flags": 2,
+    "highFlags": 0,
+    "coverage": 98
+  },
+  {
+    "label": "MODERATE",
+    "ticker": "BHEL",
+    "company": "Bharat Heavy Electricals Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 20.3,
+    "flags": 11,
+    "highFlags": 3,
+    "coverage": 98
+  },
+  {
+    "label": "MODERATE",
+    "ticker": "NTPC",
+    "company": "NTPC Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 6.2,
+    "flags": 4,
+    "highFlags": 1,
+    "coverage": 93
+  },
+  {
+    "label": "MODERATE",
+    "ticker": "JSWSTEEL",
+    "company": "JSW Steel Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 16.9,
+    "flags": 10,
+    "highFlags": 1,
+    "coverage": 98
+  },
+  {
+    "label": "MODERATE",
+    "ticker": "TATAPOWER",
+    "company": "Tata Power Company Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 16.8,
+    "flags": 8,
+    "highFlags": 3,
+    "coverage": 93
+  },
+  {
+    "label": "MODERATE",
+    "ticker": "UPL",
+    "company": "UPL Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 12.5,
+    "flags": 8,
+    "highFlags": 1,
+    "coverage": 93
+  },
+  {
+    "label": "BAD",
+    "ticker": "JPPOWER",
+    "company": "Jaiprakash Power Ventures Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 12.4,
+    "flags": 9,
+    "highFlags": 0,
+    "coverage": 93
+  },
+  {
+    "label": "BAD",
+    "ticker": "UNITECH",
+    "company": "Unitech Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 35.4,
+    "flags": 14,
+    "highFlags": 3,
+    "coverage": 67
+  },
+  {
+    "label": "BAD",
+    "ticker": "RCOM",
+    "company": "Reliance Communications Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 27.7,
+    "flags": 13,
+    "highFlags": 2,
+    "coverage": 69
+  },
+  {
+    "label": "BAD",
+    "ticker": "SPICEJET",
+    "company": "SpiceJet Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2025",
+    "score": 31.1,
+    "flags": 13,
+    "highFlags": 5,
+    "coverage": 74
+  },
+  {
+    "label": "BAD",
+    "ticker": "SINTEX",
+    "company": "Sintex Industries Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2022",
+    "score": 28.4,
+    "flags": 14,
+    "highFlags": 3,
+    "coverage": 84
+  },
+  {
+    "label": "GOOD",
+    "ticker": "COLPAL",
+    "company": "Colgate-Palmolive (India) Ltd",
+    "mode": "standalone",
+    "latestYear": "Mar 2026",
+    "score": 8.7,
+    "flags": 5,
+    "highFlags": 1,
+    "coverage": 95
+  },
+  {
+    "label": "BAD",
+    "ticker": "GTLINFRA",
+    "company": "GTL Infrastructure Ltd",
+    "mode": "standalone",
+    "latestYear": "Mar 2026",
+    "score": 24.4,
+    "flags": 12,
+    "highFlags": 2,
+    "coverage": 74
+  }
+]

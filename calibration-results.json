@@ -1,0 +1,167 @@
+[
+  {
+    "label": "GOOD",
+    "ticker": "HINDUNILVR",
+    "company": "Hindustan Unilever Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 11,
+    "flags": 6,
+    "highFlags": 2,
+    "coverage": 98
+  },
+  {
+    "label": "GOOD",
+    "ticker": "ASIANPAINT",
+    "company": "Asian Paints Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 10.2,
+    "flags": 7,
+    "highFlags": 0,
+    "coverage": 98
+  },
+  {
+    "label": "GOOD",
+    "ticker": "PIDILITIND",
+    "company": "Pidilite Industries Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 4.2,
+    "flags": 3,
+    "highFlags": 0,
+    "coverage": 98
+  },
+  {
+    "label": "MODERATE",
+    "ticker": "TATASTEEL",
+    "company": "Tata Steel Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 2.5,
+    "flags": 2,
+    "highFlags": 0,
+    "coverage": 98
+  },
+  {
+    "label": "MODERATE",
+    "ticker": "ONGC",
+    "company": "Oil & Natural Gas Corpn Ltd",
+    "mode": "standalone",
+    "latestYear": "Mar 2026",
+    "score": 14.7,
+    "flags": 8,
+    "highFlags": 0,
+    "coverage": 90
+  },
+  {
+    "label": "MODERATE",
+    "ticker": "HINDALCO",
+    "company": "Hindalco Industries Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 10.3,
+    "flags": 7,
+    "highFlags": 0,
+    "coverage": 97
+  },
+  {
+    "label": "MODERATE",
+    "ticker": "ASHOKLEY",
+    "company": "Ashok Leyland Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 31.4,
+    "flags": 16,
+    "highFlags": 7,
+    "coverage": 98
+  },
+  {
+    "label": "MODERATE",
+    "ticker": "BHARTIARTL",
+    "company": "Bharti Airtel Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 4.5,
+    "flags": 3,
+    "highFlags": 0,
+    "coverage": 92
+  },
+  {
+    "label": "BAD",
+    "ticker": "JPASSOCIAT",
+    "company": "Jaiprakash Associates Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2025",
+    "score": 20.7,
+    "flags": 9,
+    "highFlags": 3,
+    "coverage": 77
+  },
+  {
+    "label": "BAD",
+    "ticker": "RPOWER",
+    "company": "Reliance Power Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 19.4,
+    "flags": 10,
+    "highFlags": 2,
+    "coverage": 85
+  },
+  {
+    "label": "BAD",
+    "ticker": "RELINFRA",
+    "company": "Reliance Infrastructure Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 20.6,
+    "flags": 11,
+    "highFlags": 2,
+    "coverage": 89
+  },
+  {
+    "label": "BAD",
+    "ticker": "SUZLON",
+    "company": "Suzlon Energy Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 21.7,
+    "flags": 13,
+    "highFlags": 2,
+    "coverage": 95
+  },
+  {
+    "label": "BAD",
+    "ticker": "HCC",
+    "company": "Hindustan Construction Company Ltd",
+    "mode": "consolidated",
+    "latestYear": "Mar 2026",
+    "score": 18.2,
+    "flags": 11,
+    "highFlags": 1,
+    "coverage": 92
+  },
+  {
+    "label": "GOOD",
+    "ticker": "NESTLEIND",
+    "company": "Nestle India Ltd",
+    "mode": "standalone",
+    "latestYear": "Mar 2026",
+    "score": 3.4,
+    "flags": 2,
+    "highFlags": 0,
+    "coverage": 98
+  },
+  {
+    "label": "GOOD",
+    "ticker": "PAGEIND",
+    "company": "Page Industries Ltd",
+    "mode": "standalone",
+    "latestYear": "Mar 2026",
+    "score": 5.2,
+    "flags": 3,
+    "highFlags": 0,
+    "coverage": 95
+  }
+]
