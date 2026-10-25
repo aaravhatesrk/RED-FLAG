@@ -1,0 +1,456 @@
+{
+  "id": "RFScreenerV3Aa01",
+  "name": "Red-flag screener V3 (watchlist, risk score)",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Red-flag screener (V3, watchlist)",
+        "formDescription": "Paste up to 10 NSE/BSE symbols of non-financial Indian companies (for example IOC, RELIANCE, IDEA), separated by commas, spaces or new lines. Each company gets the 61 checks and a weighted risk score. You get one Excel file: a Ranking sheet (riskiest first, with change versus the last run) plus a detail sheet per company. Extra sources (screener peers and price APIs, NSE pledge data) are optional: if one is unavailable its checks show Not tested. Runs one company at a time, so allow about 20 seconds per company.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Tickers",
+              "fieldType": "textarea",
+              "placeholder": "IOC, RELIANCE, IDEA",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Statements",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Consolidated"
+                  },
+                  {
+                    "option": "Standalone"
+                  }
+                ]
+              },
+              "requiredField": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "rf3-0001",
+      "name": "Watchlist form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "c2d4e6f8-0301-4a00-8000-0000000000aa"
+    },
+    {
+      "parameters": {
+        "jsCode": "// V3: weighted risk score, ticker list parsing and run-to-run change. Pure functions, no dependencies.\nconst WEIGHT = { High: 3, Medium: 2, Low: 1 };\n// Band cut-offs (share of tested weight that is flagged), fitted 2026-10-25 on 29 companies labelled\n// good/moderate/bad in advance. Provisional: 19 of 29 matched vs 11 of 29 for the earlier 15/30/50.\nconst BANDS = [[10, 'Low'], [17.5, 'Moderate'], [30, 'High']];\nconst MAX_TICKERS = 10;\n\nconst round1 = (x) => Math.round(x * 10) / 10;\n\nfunction pctFlagged(rows) {\n  const tested = rows.filter((r) => r.Status === 'FLAG' || r.Status === 'OK');\n  const total = tested.reduce((s, r) => s + (WEIGHT[r.Severity] || 1), 0);\n  if (!total) return null;\n  const flagged = tested.filter((r) => r.Status === 'FLAG').reduce((s, r) => s + (WEIGHT[r.Severity] || 1), 0);\n  return round1((flagged / total) * 100);\n}\n\nfunction bandFor(score) {\n  if (score === null) return 'Unrated';\n  const hit = BANDS.find(([limit]) => score < limit);\n  return hit ? hit[1] : 'Very high';\n}\n\n// rows: check rows with Status, Severity, Section (no SUMMARY row).\nfunction scoreRows(rows) {\n  const score = pctFlagged(rows);\n  const sections = {};\n  rows.forEach((r) => { if (!(r.Section in sections)) sections[r.Section] = pctFlagged(rows.filter((x) => x.Section === r.Section)); });\n  const flagged = rows.filter((r) => r.Status === 'FLAG');\n  const tested = rows.filter((r) => r.Status !== 'Not tested').length;\n  return {\n    score,\n    band: bandFor(score),\n    flags: flagged.length,\n    highFlags: flagged.filter((r) => r.Severity === 'High').length,\n    coverage: rows.length ? Math.round((tested / rows.length) * 100) : 0,\n    sections,\n  };\n}\n\nfunction parseTickers(text, max) {\n  const limit = max || MAX_TICKERS;\n  const seen = new Set();\n  String(text || '').toUpperCase().split(/[\\s,;]+/).forEach((tok) => {\n    const t = tok.replace(/[^A-Z0-9&-]/g, '');\n    if (t) seen.add(t);\n  });\n  const all = Array.from(seen);\n  return { tickers: all.slice(0, limit), dropped: all.slice(limit) };\n}\n\nfunction changeText(previous, current) {\n  if (current === null || current === undefined) return '';\n  if (previous === undefined || previous === null) return 'New';\n  const d = round1(current - previous);\n  if (Math.abs(d) < 0.5) return 'No change';\n  return d > 0 ? 'Worse (+' + d.toFixed(1) + ')' : 'Better (' + d.toFixed(1) + ')';\n}\n\n\nconst parsed = parseTickers($input.first().json['Tickers'], MAX_TICKERS);\nconst mode = String($input.first().json['Statements'] || '').toLowerCase().startsWith('standalone') ? 'standalone' : 'consolidated';\nif (!parsed.tickers.length) return [{ json: { ticker: '', mode, dropped: [], error: 'No valid ticker found in the list.' } }];\nreturn parsed.tickers.map((ticker) => ({ json: { ticker, mode, dropped: parsed.dropped } }));"
+      },
+      "id": "rf3-0002",
+      "name": "Parse tickers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.screener.in/company/{{ encodeURIComponent($json.ticker) }}/{{ $json.mode === 'consolidated' ? 'consolidated/' : '' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 2000
+            }
+          }
+        }
+      },
+      "id": "rf3-0003",
+      "name": "Fetch screener page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const html = String($input.item.json.data || '');\nconst meta = $('Parse tickers').item.json;\nconst cid = (html.match(/data-company-id=\"(\\d+)\"/) || [])[1] || '';\nconst wid = (html.match(/data-warehouse-id=\"(\\d+)\"/) || [])[1] || '';\nreturn { json: { cid, wid, ticker: meta.ticker, consolidated: meta.mode === 'consolidated' } };"
+      },
+      "id": "rf3-0004",
+      "name": "Prepare extras",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.screener.in/api/company/{{ $('Prepare extras').item.json.cid }}/chart/?q=Price+to+Earning-Median+PE-EPS&days=1825&consolidated={{ $('Prepare extras').item.json.consolidated }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "*/*"
+            },
+            {
+              "name": "X-Requested-With",
+              "value": "XMLHttpRequest"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 20000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "id": "rf3-0005",
+      "name": "Fetch P/E history",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://www.screener.in/api/company/{{ $('Prepare extras').item.json.cid }}/chart/?q=Price&days=365&consolidated={{ $('Prepare extras').item.json.consolidated }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "*/*"
+            },
+            {
+              "name": "X-Requested-With",
+              "value": "XMLHttpRequest"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 20000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "id": "rf3-0006",
+      "name": "Fetch price history",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://www.screener.in/api/company/{{ $('Prepare extras').item.json.wid }}/peers/",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "*/*"
+            },
+            {
+              "name": "X-Requested-With",
+              "value": "XMLHttpRequest"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 20000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "id": "rf3-0007",
+      "name": "Fetch peers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://www.nseindia.com/api/corporate-pledgedata?index=equities&symbol={{ encodeURIComponent($('Prepare extras').item.json.ticker) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "*/*"
+            },
+            {
+              "name": "Referer",
+              "value": "https://www.nseindia.com/"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 20000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1500
+            }
+          }
+        }
+      },
+      "id": "rf3-0008",
+      "name": "Fetch promoter pledge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Red-flag screener V2 engine. Pure JS, no dependencies, so the same body runs in an n8n Code node.\n// Input: screener.in company page HTML. Output: { company, years, rows[] } with one row per check.\n\nconst SECTIONS = ['profit-loss', 'balance-sheet', 'cash-flow', 'ratios', 'quarters', 'shareholding'];\n\nfunction cleanText(s) {\n  return s.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\\s+/g, ' ').replace(/\\s*\\+\\s*$/, '').trim();\n}\n\nfunction toNumber(s) {\n  const t = cleanText(s).replace(/,/g, '').replace(/%/g, '');\n  if (t === '' || t === '-') return null;\n  const v = Number(t);\n  return Number.isFinite(v) ? v : null;\n}\n\n// Returns { years: [...], rows: { label: [values aligned to years] } } for the first table of a section.\nfunction parseSection(html, id) {\n  const sec = html.match(new RegExp('<section id=\"' + id + '\"[\\\\s\\\\S]*?</section>'));\n  if (!sec) return null;\n  const table = sec[0].match(/<table[\\s\\S]*?<\\/table>/);\n  if (!table) return null;\n  const head = table[0].match(/<thead[\\s\\S]*?<\\/thead>/);\n  const years = head ? [...head[0].matchAll(/<th[^>]*>([\\s\\S]*?)<\\/th>/g)].map((m) => cleanText(m[1])).slice(1) : [];\n  const rows = {};\n  for (const tr of table[0].matchAll(/<tr[^>]*>([\\s\\S]*?)<\\/tr>/g)) {\n    const cells = [...tr[1].matchAll(/<td[^>]*>([\\s\\S]*?)<\\/td>/g)].map((m) => m[1]);\n    if (cells.length < 2) continue;\n    rows[cleanText(cells[0])] = cells.slice(1).map(toNumber);\n  }\n  return { years, rows };\n}\n\n// Top ratios list: { 'Stock P/E': [5.51], 'High / Low': [189, 125], ... }\nfunction parseTopRatios(html) {\n  const ul = html.match(/<ul id=\"top-ratios\"[\\s\\S]*?<\\/ul>/);\n  const out = {};\n  if (!ul) return out;\n  for (const li of ul[0].matchAll(/<li[\\s\\S]*?<\\/li>/g)) {\n    const name = (li[0].match(/<span class=\"name\">([\\s\\S]*?)<\\/span>/) || [])[1];\n    if (name) out[cleanText(name)] = [...li[0].matchAll(/<span class=\"number\">([\\s\\S]*?)<\\/span>/g)].map((m) => toNumber(m[1]));\n  }\n  return out;\n}\n\n// Extra sources arrive as raw text from separate HTTP calls (screener chart + peers APIs, NSE pledge API).\n// Anything missing or malformed stays null so the dependent checks report \"Not tested\".\nfunction parseExtras(extras) {\n  const x = extras || {};\n  const json = (t) => { try { return typeof t === 'string' ? JSON.parse(t) : null; } catch (e) { return null; } };\n  const dataset = (j, metric) => (j && Array.isArray(j.datasets) ? j.datasets.find((d) => d.metric === metric && Array.isArray(d.values) && d.values.length) : null);\n  const out = { medianPe: null, priceChange: null, peerPe: [], pledge: null, pledgeDate: null };\n\n  const med = dataset(json(x.pe), 'Median PE');\n  if (med) out.medianPe = Number(med.values[med.values.length - 1][1]);\n\n  const px = dataset(json(x.price), 'Price');\n  if (px && px.values.length > 1) {\n    const first = Number(px.values[0][1]), last = Number(px.values[px.values.length - 1][1]);\n    if (first > 0 && Number.isFinite(last)) out.priceChange = last / first - 1;\n  }\n\n  const peers = typeof x.peers === 'string' ? x.peers : '';\n  const heads = [...(peers.match(/<tr[^>]*>(?:(?!<\\/tr>)[\\s\\S])*<th[\\s\\S]*?<\\/tr>/) || [''])[0].matchAll(/<th[^>]*>([\\s\\S]*?)<\\/th>/g)].map((m) => cleanText(m[1]));\n  const col = heads.indexOf('P/E');\n  if (col >= 0) {\n    for (const tr of peers.matchAll(/<tr[^>]*>([\\s\\S]*?)<\\/tr>/g)) {\n      const cells = [...tr[1].matchAll(/<td[^>]*>([\\s\\S]*?)<\\/td>/g)].map((m) => cleanText(m[1]));\n      const v = /^\\d+\\.$/.test(cells[0] || '') ? toNumber(cells[col] || '') : null;\n      if (v !== null && v > 0) out.peerPe.push(v);\n    }\n  }\n\n  const pl = json(x.pledge);\n  const row = pl && Array.isArray(pl.data) ? pl.data[0] : null;\n  if (row) { out.pledge = toNumber(String(row.percPromoterShares)); out.pledgeDate = row.shp; }\n  return out;\n}\n\nfunction parseCompany(html) {\n  const out = { company: (html.match(/<h1[^>]*>([\\s\\S]*?)<\\/h1>/) || [])[1], data: {}, ratios: parseTopRatios(html) };\n  out.company = out.company ? cleanText(out.company) : 'Unknown';\n  for (const id of SECTIONS) out.data[id] = parseSection(html, id);\n  return out;\n}\n\nconst ANNUAL = /^[A-Z][a-z]{2} \\d{4}$/;\nconst LABELS = {\n  sales: ['profit-loss', 'Sales'], opProfit: ['profit-loss', 'Operating Profit'], opm: ['profit-loss', 'OPM %'],\n  expenses: ['profit-loss', 'Expenses'], otherInc: ['profit-loss', 'Other Income'], interest: ['profit-loss', 'Interest'],\n  dep: ['profit-loss', 'Depreciation'], pbt: ['profit-loss', 'Profit before tax'], tax: ['profit-loss', 'Tax %'],\n  np: ['profit-loss', 'Net Profit'], eps: ['profit-loss', 'EPS in Rs'], payout: ['profit-loss', 'Dividend Payout %'],\n  eqCap: ['balance-sheet', 'Equity Capital'], reserves: ['balance-sheet', 'Reserves'], borrow: ['balance-sheet', 'Borrowings'],\n  otherLiab: ['balance-sheet', 'Other Liabilities'], fixedAssets: ['balance-sheet', 'Fixed Assets'], cwip: ['balance-sheet', 'CWIP'],\n  investments: ['balance-sheet', 'Investments'], otherAssets: ['balance-sheet', 'Other Assets'], totalAssets: ['balance-sheet', 'Total Assets'],\n  cfo: ['cash-flow', 'Cash from Operating Activity'], cfi: ['cash-flow', 'Cash from Investing Activity'],\n  cff: ['cash-flow', 'Cash from Financing Activity'], fcf: ['cash-flow', 'Free Cash Flow'],\n  debtorDays: ['ratios', 'Debtor Days'], invDays: ['ratios', 'Inventory Days'], payDays: ['ratios', 'Days Payable'],\n  wcDays: ['ratios', 'Working Capital Days'], roce: ['ratios', 'ROCE %'],\n};\n\nconst QLABELS = {\n  sales: ['quarters', 'Sales'], opm: ['quarters', 'OPM %'], otherInc: ['quarters', 'Other Income'],\n  pbt: ['quarters', 'Profit before tax'], np: ['quarters', 'Net Profit'],\n};\nconst SHLABELS = {\n  promoters: ['shareholding', 'Promoters'], fii: ['shareholding', 'FIIs'], dii: ['shareholding', 'DIIs'], pub: ['shareholding', 'Public'],\n};\n\n// Label matching tolerates trailing text, e.g. \"EPS in Rs\" vs \"EPS in Rs\".\nfunction findRow(section, label) {\n  if (!section) return null;\n  const key = Object.keys(section.rows).find((k) => k === label || k.startsWith(label));\n  return key ? { years: section.years, values: section.rows[key] } : null;\n}\n\n// Aligns every labelled series on the given period labels.\nfunction alignOn(parsed, years, labels) {\n  const s = {};\n  for (const [name, [sec, label]] of Object.entries(labels)) {\n    const row = findRow(parsed.data[sec], label);\n    s[name] = years.map((y) => {\n      if (!row) return null;\n      const i = row.years.indexOf(y);\n      return i < 0 ? null : row.values[i];\n    });\n  }\n  return s;\n}\n\n// Annual series align on the profit-loss year labels; quarterly and shareholding series on their own period labels.\nfunction buildSeries(parsed) {\n  const pl = parsed.data['profit-loss'];\n  if (!pl) return null;\n  const years = pl.years.filter((y) => ANNUAL.test(y));\n  const periods = (id) => (parsed.data[id] ? parsed.data[id].years.filter((y) => ANNUAL.test(y)) : []);\n  return {\n    years, s: alignOn(parsed, years, LABELS),\n    q: alignOn(parsed, periods('quarters'), QLABELS),\n    sh: alignOn(parsed, periods('shareholding'), SHLABELS),\n    ratios: parsed.ratios,\n  };\n}\n\n// ---- helpers over a series (index 0 = latest year) ----\nconst at = (arr, k) => (arr && arr.length > k ? arr[arr.length - 1 - k] : null);\nconst has = (...vals) => vals.every((v) => v !== null && v !== undefined && Number.isFinite(v));\nconst lastN = (arr, n) => arr.slice(-n);\nconst sum = (arr) => arr.reduce((a, b) => a + b, 0);\nconst f1 = (v) => (Math.round(v * 10) / 10).toLocaleString('en-IN');\nconst pct = (v) => (Math.round(v * 1000) / 10) + '%';\n\nfunction cagr(arr, years) {\n  const a = at(arr, 0);\n  const b = at(arr, years);\n  return has(a, b) && a > 0 && b > 0 ? Math.pow(a / b, 1 / years) - 1 : null;\n}\n\nfunction risingRun(arr, runLen) {\n  const v = lastN(arr, runLen + 1);\n  return v.length === runLen + 1 && v.every(Number.isFinite) && v.every((x, i) => i === 0 || x > v[i - 1]);\n}\n\nfunction fallingRun(arr, runLen) {\n  const v = lastN(arr, runLen + 1);\n  return v.length === runLen + 1 && v.every(Number.isFinite) && v.every((x, i) => i === 0 || x < v[i - 1]);\n}\n\nfunction ratioSeries(num, den) {\n  return num.map((n, i) => (has(n, den[i]) && den[i] !== 0 ? n / den[i] : null));\n}\n\nconst sumKnown = (arr) => (lastN(arr, arr.length).every(Number.isFinite) ? sum(arr) : null);\n\n// ---- checks: each returns null (cannot test), or { flag, ev } ----\nfunction buildChecks({ s, q, sh, ratios }, x) {\n  const equity = s.eqCap.map((e, i) => (has(e, s.reserves[i]) ? e + s.reserves[i] : null));\n  const de = ratioSeries(s.borrow, equity);\n  const checks = [];\n  const add = (id, section, severity, name, fn) => checks.push({ id, section, severity, name, fn });\n\n  // A. Earnings quality\n  add('A1', 'Earnings quality', 'High', 'Cash from operations below 0.8x net profit in 3 of last 5 years', () => {\n    const cfo = lastN(s.cfo, 5), np = lastN(s.np, 5);\n    if (cfo.length < 5 || !cfo.every(Number.isFinite) || !np.every(Number.isFinite)) return null;\n    const bad = cfo.filter((c, i) => np[i] > 0 && c / np[i] < 0.8).length;\n    return { flag: bad >= 3, ev: bad + ' of 5 years below 0.8x' };\n  });\n  add('A2', 'Earnings quality', 'High', 'Five-year cumulative cash from operations below cumulative net profit', () => {\n    const c = sumKnown(lastN(s.cfo, 5)), n = sumKnown(lastN(s.np, 5));\n    if (!has(c, n)) return null;\n    return { flag: c < n, ev: 'CFO ' + f1(c) + ' vs net profit ' + f1(n) + ' (Rs Cr)' };\n  });\n  add('A3', 'Earnings quality', 'High', 'Net profit rising while cash from operations falls for 2 years', () => {\n    const np = lastN(s.np, 3), cfo = lastN(s.cfo, 3);\n    if (np.length < 3 || !np.every(Number.isFinite) || !cfo.every(Number.isFinite)) return null;\n    return { flag: np[1] > np[0] && np[2] > np[1] && cfo[1] < cfo[0] && cfo[2] < cfo[1], ev: 'NP ' + np.map(f1).join(' > ') + '; CFO ' + cfo.map(f1).join(' > ') };\n  });\n  add('A4', 'Earnings quality', 'Medium', 'Other income above 20% of profit before tax', () => {\n    const o = at(s.otherInc, 0), p = at(s.pbt, 0);\n    if (!has(o, p) || p <= 0) return null;\n    return { flag: o / p > 0.2, ev: 'Other income is ' + pct(o / p) + ' of PBT' };\n  });\n  add('A5', 'Earnings quality', 'Medium', 'Other income growing 10+ points faster than operating profit (3-year CAGR)', () => {\n    const o = cagr(s.otherInc, 3), p = cagr(s.opProfit, 3);\n    if (!has(o, p)) return null;\n    return { flag: o - p > 0.1, ev: 'Other income ' + pct(o) + ' vs operating profit ' + pct(p) + ' a year' };\n  });\n  add('A6', 'Earnings quality', 'Medium', 'Tax rate below 15% in each of the last 2 years', () => {\n    const t = lastN(s.tax, 2);\n    if (t.length < 2 || !t.every(Number.isFinite)) return null;\n    return { flag: t.every((x) => x < 15), ev: 'Tax rate ' + t.join('%, ') + '%' };\n  });\n  add('A7', 'Earnings quality', 'Low', 'Tax rate above 35% in the latest year', () => {\n    const t = at(s.tax, 0);\n    return has(t) ? { flag: t > 35, ev: 'Tax rate ' + t + '%' } : null;\n  });\n  add('A8', 'Earnings quality', 'Medium', 'Depreciation as % of fixed assets down 25%+ over 3 years', () => {\n    const now = at(s.dep, 0) / at(s.fixedAssets, 0), then = at(s.dep, 3) / at(s.fixedAssets, 3);\n    if (!has(now, then) || then <= 0) return null;\n    return { flag: now < then * 0.75, ev: 'Depreciation rate ' + pct(then) + ' to ' + pct(now) };\n  });\n  add('A9', 'Earnings quality', 'Low', 'Operating margin moved more than 5 points in the latest year', () => {\n    const a = at(s.opm, 0), b = at(s.opm, 1);\n    return has(a, b) ? { flag: Math.abs(a - b) > 5, ev: 'OPM ' + b + '% to ' + a + '%' } : null;\n  });\n  add('A10', 'Earnings quality', 'Medium', 'EPS growing 5+ points slower than net profit (dilution, 3-year CAGR)', () => {\n    const e = cagr(s.eps, 3), n = cagr(s.np, 3);\n    if (!has(e, n)) return null;\n    return { flag: n - e > 0.05, ev: 'EPS ' + pct(e) + ' vs net profit ' + pct(n) + ' a year' };\n  });\n\n  // B. Cash flow and capital allocation\n  add('B1', 'Cash flow', 'Medium', 'Free cash flow negative in 3 of last 5 years', () => {\n    const f = lastN(s.fcf, 5);\n    if (f.length < 5 || !f.every(Number.isFinite)) return null;\n    const bad = f.filter((x) => x < 0).length;\n    return { flag: bad >= 3, ev: bad + ' of 5 years negative (' + f.map(f1).join(', ') + ')' };\n  });\n  add('B2', 'Cash flow', 'High', 'Five-year cumulative free cash flow negative while profit is positive', () => {\n    const f = sumKnown(lastN(s.fcf, 5)), n = sumKnown(lastN(s.np, 5));\n    if (!has(f, n)) return null;\n    return { flag: f < 0 && n > 0, ev: 'FCF ' + f1(f) + ' vs net profit ' + f1(n) + ' (Rs Cr)' };\n  });\n  add('B3', 'Cash flow', 'Medium', 'Financing brings in cash in 4 of last 5 years (needs outside money)', () => {\n    const c = lastN(s.cff, 5);\n    if (c.length < 5 || !c.every(Number.isFinite)) return null;\n    const pos = c.filter((x) => x > 0).length;\n    return { flag: pos >= 4, ev: pos + ' of 5 years positive financing cash flow' };\n  });\n  add('B4', 'Cash flow', 'High', 'Operating cash flow negative while financing cash flow is positive', () => {\n    const o = at(s.cfo, 0), f = at(s.cff, 0);\n    return has(o, f) ? { flag: o < 0 && f > 0, ev: 'CFO ' + f1(o) + ', CFF ' + f1(f) + ' (Rs Cr)' } : null;\n  });\n  add('B5', 'Cash flow', 'Medium', 'Capital work in progress above 30% of fixed assets and rising 3 years', () => {\n    const share = ratioSeries(s.cwip, s.fixedAssets);\n    const now = at(share, 0);\n    if (!has(now)) return null;\n    return { flag: now > 0.3 && risingRun(s.cwip, 3), ev: 'CWIP is ' + pct(now) + ' of fixed assets' };\n  });\n  add('B6', 'Cash flow', 'Medium', 'Three-year dividends exceed three-year free cash flow while borrowings rise', () => {\n    const div = lastN(s.np, 3).map((n, i) => n * lastN(s.payout, 3)[i] / 100);\n    const f = sumKnown(lastN(s.fcf, 3)), d = sumKnown(div);\n    const b0 = at(s.borrow, 0), b3 = at(s.borrow, 3);\n    if (!has(f, d, b0, b3)) return null;\n    return { flag: d > f && b0 > b3, ev: 'Dividends ' + f1(d) + ' vs FCF ' + f1(f) + '; borrowings ' + f1(b3) + ' to ' + f1(b0) };\n  });\n  add('B7', 'Cash flow', 'Low', 'Investments growing 15%+ a year while ROCE falls', () => {\n    const g = cagr(s.investments, 3);\n    if (!has(g)) return null;\n    return { flag: g > 0.15 && at(s.roce, 0) < at(s.roce, 3), ev: 'Investments ' + pct(g) + ' a year; ROCE ' + at(s.roce, 3) + '% to ' + at(s.roce, 0) + '%' };\n  });\n\n  // C. Working capital and revenue quality\n  add('C1', 'Working capital', 'Medium', 'Debtor days up 30%+ over 3 years (and 5+ days)', () => {\n    const a = at(s.debtorDays, 0), b = at(s.debtorDays, 3);\n    return has(a, b) && b > 0 ? { flag: a > b * 1.3 && a - b >= 5, ev: 'Debtor days ' + b + ' to ' + a } : null;\n  });\n  add('C2', 'Working capital', 'Low', 'Debtor days rising 3 years in a row', () => {\n    const d = lastN(s.debtorDays, 4);\n    return d.length < 4 || !d.every(Number.isFinite) ? null : { flag: risingRun(s.debtorDays, 3), ev: 'Debtor days ' + d.join(', ') };\n  });\n  add('C3', 'Working capital', 'Medium', 'Inventory days up 30%+ over 3 years (and 10+ days)', () => {\n    const a = at(s.invDays, 0), b = at(s.invDays, 3);\n    return has(a, b) && b > 0 ? { flag: a > b * 1.3 && a - b >= 10, ev: 'Inventory days ' + b + ' to ' + a } : null;\n  });\n  add('C4', 'Working capital', 'Medium', 'Days payable up 30%+ over 3 years (stretching suppliers)', () => {\n    const a = at(s.payDays, 0), b = at(s.payDays, 3);\n    return has(a, b) && b > 0 ? { flag: a > b * 1.3 && a - b >= 10, ev: 'Days payable ' + b + ' to ' + a } : null;\n  });\n  add('C5', 'Working capital', 'Low', 'Days payable down 30%+ over 3 years (suppliers want cash earlier)', () => {\n    const a = at(s.payDays, 0), b = at(s.payDays, 3);\n    return has(a, b) && b > 0 ? { flag: a < b * 0.7 && b - a >= 10, ev: 'Days payable ' + b + ' to ' + a } : null;\n  });\n  add('C6', 'Working capital', 'Medium', 'Working capital days rising 3 years in a row (and up 10+ days)', () => {\n    const w = lastN(s.wcDays, 4);\n    if (w.length < 4 || !w.every(Number.isFinite)) return null;\n    return { flag: risingRun(s.wcDays, 3) && w[3] - w[0] >= 10, ev: 'Working capital days ' + w.join(', ') };\n  });\n  add('C7', 'Working capital', 'Medium', 'Sales up 20%+ in the latest year while cash from operations fell', () => {\n    const s0 = at(s.sales, 0), s1 = at(s.sales, 1), c0 = at(s.cfo, 0), c1 = at(s.cfo, 1);\n    if (!has(s0, s1, c0, c1) || s1 <= 0) return null;\n    return { flag: s0 / s1 > 1.2 && c0 < c1, ev: 'Sales ' + pct(s0 / s1 - 1) + ' growth; CFO ' + f1(c1) + ' to ' + f1(c0) };\n  });\n  add('C8', 'Working capital', 'Medium', 'Other assets growing 10+ points faster than sales (3-year CAGR)', () => {\n    const o = cagr(s.otherAssets, 3), v = cagr(s.sales, 3);\n    return has(o, v) ? { flag: o - v > 0.1, ev: 'Other assets ' + pct(o) + ' vs sales ' + pct(v) + ' a year' } : null;\n  });\n\n  // D. Leverage and solvency\n  add('D1', 'Leverage', 'High', 'Debt to equity above 1.5', () => {\n    const d = at(de, 0);\n    return has(d) ? { flag: d > 1.5, ev: 'Debt/equity ' + (Math.round(d * 100) / 100) + 'x' } : null;\n  });\n  add('D2', 'Leverage', 'Medium', 'Debt to equity rising 3 years in a row', () => {\n    const d = lastN(de, 4);\n    return d.length < 4 || !d.every(Number.isFinite) ? null : { flag: risingRun(de, 3), ev: 'Debt/equity ' + d.map((x) => Math.round(x * 100) / 100).join(', ') };\n  });\n  add('D3', 'Leverage', 'Medium', 'Borrowings growing 10+ points faster than reserves (3-year CAGR)', () => {\n    const b = cagr(s.borrow, 3), r = cagr(s.reserves, 3);\n    return has(b, r) ? { flag: b - r > 0.1, ev: 'Borrowings ' + pct(b) + ' vs reserves ' + pct(r) + ' a year' } : null;\n  });\n  add('D4', 'Leverage', 'Medium', 'Borrowings growing 10+ points faster than operating profit (3-year CAGR)', () => {\n    const b = cagr(s.borrow, 3), o = cagr(s.opProfit, 3);\n    return has(b, o) ? { flag: b - o > 0.1, ev: 'Borrowings ' + pct(b) + ' vs operating profit ' + pct(o) + ' a year' } : null;\n  });\n  add('D5', 'Leverage', 'High', 'Borrowings above 3x operating profit', () => {\n    const b = at(s.borrow, 0), o = at(s.opProfit, 0);\n    if (!has(b, o)) return null;\n    return { flag: o <= 0 || b / o > 3, ev: 'Borrowings: ' + (o > 0 ? (Math.round(b / o * 10) / 10) + 'x operating profit' : 'not meaningful (operating profit is zero or negative)') };\n  });\n  add('D6', 'Leverage', 'High', 'Interest cover (operating profit / interest) below 3x', () => {\n    const o = at(s.opProfit, 0), i = at(s.interest, 0);\n    if (!has(o, i) || i <= 0) return null;\n    return { flag: o / i < 3, ev: 'Interest cover ' + (Math.round(o / i * 10) / 10) + 'x' };\n  });\n  add('D7', 'Leverage', 'Medium', 'Interest takes more than 40% of operating profit', () => {\n    const o = at(s.opProfit, 0), i = at(s.interest, 0);\n    if (!has(o, i) || o <= 0) return null;\n    return { flag: i / o > 0.4, ev: 'Interest is ' + pct(i / o) + ' of operating profit' };\n  });\n  add('D8', 'Leverage', 'Medium', 'Interest cost falling while borrowings rise for 2 years (interest may be capitalised)', () => {\n    const i = lastN(s.interest, 3), b = lastN(s.borrow, 3);\n    if (i.length < 3 || !i.every(Number.isFinite) || !b.every(Number.isFinite)) return null;\n    return { flag: i[1] < i[0] && i[2] < i[1] && b[1] > b[0] && b[2] > b[1], ev: 'Interest ' + i.map(f1).join(', ') + '; borrowings ' + b.map(f1).join(', ') };\n  });\n  add('D9', 'Leverage', 'Low', 'Other liabilities growing 15+ points faster than sales (3-year CAGR)', () => {\n    const o = cagr(s.otherLiab, 3), v = cagr(s.sales, 3);\n    return has(o, v) ? { flag: o - v > 0.15, ev: 'Other liabilities ' + pct(o) + ' vs sales ' + pct(v) + ' a year' } : null;\n  });\n  add('D10', 'Leverage', 'High', 'Reserves fell in the latest year despite positive net profit', () => {\n    const r0 = at(s.reserves, 0), r1 = at(s.reserves, 1), n = at(s.np, 0);\n    return has(r0, r1, n) ? { flag: r0 < r1 && n > 0, ev: 'Reserves ' + f1(r1) + ' to ' + f1(r0) + '; net profit ' + f1(n) } : null;\n  });\n\n  // E. Returns and efficiency\n  add('E1', 'Returns', 'Medium', 'ROCE below 12% in each of the last 3 years', () => {\n    const r = lastN(s.roce, 3);\n    return r.length < 3 || !r.every(Number.isFinite) ? null : { flag: r.every((x) => x < 12), ev: 'ROCE ' + r.join('%, ') + '%' };\n  });\n  add('E2', 'Returns', 'Medium', 'ROCE falling 3 years in a row', () => {\n    const r = lastN(s.roce, 4);\n    return r.length < 4 || !r.every(Number.isFinite) ? null : { flag: fallingRun(s.roce, 3), ev: 'ROCE ' + r.join('%, ') + '%' };\n  });\n  add('E3', 'Returns', 'Medium', 'ROE falling 3 years while debt to equity rises (return propped up by debt)', () => {\n    const roe = ratioSeries(s.np, equity), r = lastN(roe, 4);\n    if (r.length < 4 || !r.every(Number.isFinite) || !lastN(de, 4).every(Number.isFinite)) return null;\n    return { flag: fallingRun(roe, 3) && at(de, 0) > at(de, 3), ev: 'ROE ' + r.map(pct).join(', ') };\n  });\n  add('E4', 'Returns', 'Low', 'Asset turnover (sales / total assets) falling 3 years in a row', () => {\n    const t = ratioSeries(s.sales, s.totalAssets), v = lastN(t, 4);\n    return v.length < 4 || !v.every(Number.isFinite) ? null : { flag: fallingRun(t, 3), ev: 'Turnover ' + v.map((x) => Math.round(x * 100) / 100).join(', ') };\n  });\n  add('E5', 'Returns', 'Medium', 'Sales per rupee of fixed assets down 25%+ over 3 years', () => {\n    const t = ratioSeries(s.sales, s.fixedAssets), a = at(t, 0), b = at(t, 3);\n    return has(a, b) ? { flag: a < b * 0.75, ev: 'Fixed asset turnover ' + (Math.round(b * 100) / 100) + ' to ' + (Math.round(a * 100) / 100) } : null;\n  });\n  add('E6', 'Returns', 'Medium', 'New capital earns far less than old: 5-year change in (operating profit - depreciation) is under 5% of the change in total assets', () => {\n    const ebit = s.opProfit.map((o, i) => (has(o, s.dep[i]) ? o - s.dep[i] : null));\n    const dE = at(ebit, 0) - at(ebit, 5), dA = at(s.totalAssets, 0) - at(s.totalAssets, 5);\n    if (!has(dE, dA) || dA <= 0) return null;\n    return { flag: dE / dA < 0.05, ev: 'Incremental return ' + pct(dE / dA) + ' on added assets' };\n  });\n\n  // F. Margin and growth\n  add('F1', 'Margin and growth', 'Low', 'Operating margin falling 3 years in a row', () => {\n    const m = lastN(s.opm, 4);\n    return m.length < 4 || !m.every(Number.isFinite) ? null : { flag: fallingRun(s.opm, 3), ev: 'OPM ' + m.join('%, ') + '%' };\n  });\n  add('F2', 'Margin and growth', 'Medium', 'Expenses growing faster than sales for 2 years', () => {\n    const sa = lastN(s.sales, 3), ex = lastN(s.expenses, 3);\n    if (sa.length < 3 || !sa.every(Number.isFinite) || !ex.every(Number.isFinite)) return null;\n    const g = (v, i) => v[i] / v[i - 1] - 1;\n    return { flag: g(ex, 1) > g(sa, 1) && g(ex, 2) > g(sa, 2), ev: 'Expenses ' + pct(g(ex, 2)) + ' vs sales ' + pct(g(sa, 2)) + ' in the latest year' };\n  });\n  add('F3', 'Margin and growth', 'Medium', 'Latest-year profit more than 50% above its 5-year average (possible peak earnings)', () => {\n    const n = lastN(s.np, 5);\n    if (n.length < 5 || !n.every(Number.isFinite)) return null;\n    const avg = sum(n) / 5;\n    return { flag: avg > 0 && n[4] > avg * 1.5, ev: 'Net profit ' + f1(n[4]) + ' vs 5-year average ' + f1(avg) };\n  });\n\n  // G. Ownership (quarterly shareholding table). Percentage-point changes are rounded to avoid float noise at the threshold.\n  const pts = (v) => Math.round(v * 100) / 100;\n  const holding = (arr) => lastN(arr, 12);\n  const span = (arr) => {\n    const h = holding(arr);\n    return h.length < 9 || !h.every(Number.isFinite) ? null : h;\n  };\n  add('G1', 'Ownership', 'High', 'Promoter holding down 5+ points over the last 12 quarters', () => {\n    const h = span(sh.promoters);\n    return h ? { flag: pts(h[0] - h[h.length - 1]) >= 5, ev: 'Promoter holding ' + h[0] + '% to ' + h[h.length - 1] + '% over ' + h.length + ' quarters' } : null;\n  });\n  add('G2', 'Ownership', 'Medium', 'Promoter holding falling 4 quarters in a row', () => {\n    const p = lastN(sh.promoters, 5);\n    return p.length < 5 || !p.every(Number.isFinite) ? null : { flag: fallingRun(sh.promoters, 4), ev: 'Promoter holding ' + p.join('%, ') + '%' };\n  });\n  add('G3', 'Ownership', 'Medium', 'Promoter holding below 25% (weak control, or a professionally managed company)', () => {\n    const p = at(sh.promoters, 0);\n    return has(p) ? { flag: p < 25, ev: 'Promoter holding ' + p + '%' } : null;\n  });\n  add('G4', 'Ownership', 'Medium', 'FII and DII holding both falling 3 quarters in a row', () => {\n    const f = lastN(sh.fii, 4), d = lastN(sh.dii, 4);\n    if (f.length < 4 || !f.every(Number.isFinite) || !d.every(Number.isFinite)) return null;\n    return { flag: fallingRun(sh.fii, 3) && fallingRun(sh.dii, 3), ev: 'FII ' + f.join('%, ') + '%; DII ' + d.join('%, ') + '%' };\n  });\n  add('G5', 'Ownership', 'Low', 'Public holding up 5+ points over the last 12 quarters (shares moving to retail)', () => {\n    const h = span(sh.pub);\n    return h ? { flag: pts(h[h.length - 1] - h[0]) >= 5, ev: 'Public holding ' + h[0] + '% to ' + h[h.length - 1] + '% over ' + h.length + ' quarters' } : null;\n  });\n\n  add('G6', 'Ownership', 'High', 'More than 10% of promoter shares pledged (NSE disclosure)', () => {\n    return has(x.pledge) ? { flag: x.pledge > 10, ev: x.pledge + '% of promoter shares pledged as of ' + x.pledgeDate } : null;\n  });\n\n  // H. Valuation and market signals (top ratios block)\n  const top = (name, k) => (ratios && ratios[name] ? ratios[name][k || 0] : null);\n  add('H1', 'Valuation', 'Medium', 'Price to book above 5 with ROE under 12%', () => {\n    const price = top('Current Price'), bv = top('Book Value'), roe = top('ROE');\n    if (!has(price, bv, roe) || bv <= 0) return null;\n    const pb = price / bv;\n    return { flag: pb > 5 && roe < 12, ev: 'Price/book ' + (Math.round(pb * 10) / 10) + 'x, ROE ' + roe + '%' };\n  });\n  add('H2', 'Valuation', 'Medium', 'Dividend yield above 8% with payout above 100% (unsustainable)', () => {\n    const y = top('Dividend Yield'), p = at(s.payout, 0);\n    return has(y, p) ? { flag: y > 8 && p > 100, ev: 'Dividend yield ' + y + '%, payout ' + p + '% of profit' } : null;\n  });\n  add('H3', 'Valuation', 'Low', 'Price more than 30% below the 52-week high', () => {\n    const price = top('Current Price'), high = top('High / Low', 0);\n    if (!has(price, high) || high <= 0) return null;\n    return { flag: 1 - price / high > 0.3, ev: 'Price ' + price + ' vs 52-week high ' + high + ' (' + pct(1 - price / high) + ' below)' };\n  });\n  add('H4', 'Valuation', 'Medium', 'P/E more than 3x the 3-year profit growth rate (PEG above 3)', () => {\n    const pe = top('Stock P/E'), g = cagr(s.np, 3);\n    if (!has(pe, g) || pe <= 0 || g <= 0) return null;\n    return { flag: pe / (g * 100) > 3, ev: 'P/E ' + pe + ' vs profit growth ' + pct(g) + ' a year (PEG ' + (Math.round(pe / (g * 100) * 10) / 10) + ')' };\n  });\n\n  add('H5', 'Valuation', 'Medium', 'P/E more than 2x its own 5-year median', () => {\n    const pe = top('Stock P/E');\n    if (!has(pe, x.medianPe) || pe <= 0 || x.medianPe <= 0) return null;\n    return { flag: pe > 2 * x.medianPe, ev: 'P/E ' + pe + ' vs 5-year median ' + x.medianPe };\n  });\n  add('H6', 'Valuation', 'Low', 'Price down 20%+ over the past year while the latest annual net profit rose', () => {\n    const n0 = at(s.np, 0), n1 = at(s.np, 1);\n    if (!has(x.priceChange, n0, n1)) return null;\n    return { flag: Math.round(x.priceChange * 10000) / 10000 <= -0.2 && n0 > n1, ev: 'Price ' + pct(x.priceChange) + ' in a year; net profit ' + f1(n1) + ' to ' + f1(n0) };\n  });\n  add('H7', 'Valuation', 'Medium', 'P/E more than 50% above the median of screener.in peers', () => {\n    const pe = top('Stock P/E');\n    if (!has(pe) || pe <= 0 || x.peerPe.length < 4) return null;\n    const sorted = [...x.peerPe].sort((a, b) => a - b), m = sorted.length / 2;\n    const med = sorted.length % 2 ? sorted[Math.floor(m)] : (sorted[m - 1] + sorted[m]) / 2;\n    return { flag: pe > 1.5 * med, ev: 'P/E ' + pe + ' vs peer median ' + (Math.round(med * 10) / 10) + ' (' + x.peerPe.length + ' peers)' };\n  });\n\n  // Q. Latest quarter vs the same quarter a year earlier (removes seasonality)\n  add('Q1', 'Quarterly', 'Medium', 'Operating margin down 5+ points vs the same quarter last year', () => {\n    const a = at(q.opm, 0), b = at(q.opm, 4);\n    return has(a, b) ? { flag: pts(a - b) <= -5, ev: 'OPM ' + b + '% to ' + a + '%' } : null;\n  });\n  add('Q2', 'Quarterly', 'Medium', 'Net profit down 20%+ vs the same quarter last year', () => {\n    const a = at(q.np, 0), b = at(q.np, 4);\n    if (!has(a, b) || b <= 0) return null;\n    return { flag: Math.round((a / b - 1) * 10000) / 10000 <= -0.2, ev: 'Quarterly net profit ' + f1(b) + ' to ' + f1(a) + ' (' + pct(a / b - 1) + ')' };\n  });\n  add('Q3', 'Quarterly', 'Medium', 'Other income above 20% of the latest quarter\\'s profit before tax', () => {\n    const o = at(q.otherInc, 0), p = at(q.pbt, 0);\n    if (!has(o, p) || p <= 0) return null;\n    return { flag: o / p > 0.2, ev: 'Other income is ' + pct(o / p) + ' of quarterly PBT' };\n  });\n  add('Q4', 'Quarterly', 'Low', 'Year-on-year sales growth slowing 3 quarters in a row', () => {\n    const base = lastN(q.sales, 8), growth = [];\n    if (base.length < 8 || !base.every((x) => Number.isFinite(x) && x > 0)) return null;\n    for (let i = 4; i < 8; i++) growth.push(base[i] / base[i - 4] - 1);\n    return { flag: growth.every((g, i) => i === 0 || g < growth[i - 1]), ev: 'Sales growth ' + growth.map(pct).join(', ') };\n  });\n  return checks;\n}\n\nfunction runChecks(html, extras) {\n  const parsed = parseCompany(html);\n  if (!parsed.data['profit-loss']) return { error: 'Could not find financial tables. Check the ticker.' };\n  if (!findRow(parsed.data['profit-loss'], 'Operating Profit')) {\n    return { error: 'This looks like a bank, NBFC or insurer. V2 only supports non-financial companies.' };\n  }\n  const built = buildSeries(parsed);\n  if (!built || built.years.length < 6) return { error: 'Not enough annual history (need at least 6 years).' };\n  const rows = buildChecks(built, parseExtras(extras)).map((c) => {\n    let res = null;\n    try { res = c.fn(); } catch (e) { res = null; }\n    const status = res === null ? 'Not tested' : res.flag ? 'FLAG' : 'OK';\n    return { Status: status, Severity: c.severity, Section: c.section, Check: c.id + '. ' + c.name, Evidence: res === null ? 'Not testable (row missing or value zero/negative)' : res.ev };\n  });\n  const order = { FLAG: 0, OK: 1, 'Not tested': 2 };\n  const sev = { High: 0, Medium: 1, Low: 2 };\n  rows.sort((a, b) => order[a.Status] - order[b.Status] || sev[a.Severity] - sev[b.Severity]);\n  return { company: parsed.company, latestYear: built.years[built.years.length - 1], rows };\n}\n\n// V3: weighted risk score, ticker list parsing and run-to-run change. Pure functions, no dependencies.\nconst WEIGHT = { High: 3, Medium: 2, Low: 1 };\n// Band cut-offs (share of tested weight that is flagged), fitted 2026-10-25 on 29 companies labelled\n// good/moderate/bad in advance. Provisional: 19 of 29 matched vs 11 of 29 for the earlier 15/30/50.\nconst BANDS = [[10, 'Low'], [17.5, 'Moderate'], [30, 'High']];\nconst MAX_TICKERS = 10;\n\nconst round1 = (x) => Math.round(x * 10) / 10;\n\nfunction pctFlagged(rows) {\n  const tested = rows.filter((r) => r.Status === 'FLAG' || r.Status === 'OK');\n  const total = tested.reduce((s, r) => s + (WEIGHT[r.Severity] || 1), 0);\n  if (!total) return null;\n  const flagged = tested.filter((r) => r.Status === 'FLAG').reduce((s, r) => s + (WEIGHT[r.Severity] || 1), 0);\n  return round1((flagged / total) * 100);\n}\n\nfunction bandFor(score) {\n  if (score === null) return 'Unrated';\n  const hit = BANDS.find(([limit]) => score < limit);\n  return hit ? hit[1] : 'Very high';\n}\n\n// rows: check rows with Status, Severity, Section (no SUMMARY row).\nfunction scoreRows(rows) {\n  const score = pctFlagged(rows);\n  const sections = {};\n  rows.forEach((r) => { if (!(r.Section in sections)) sections[r.Section] = pctFlagged(rows.filter((x) => x.Section === r.Section)); });\n  const flagged = rows.filter((r) => r.Status === 'FLAG');\n  const tested = rows.filter((r) => r.Status !== 'Not tested').length;\n  return {\n    score,\n    band: bandFor(score),\n    flags: flagged.length,\n    highFlags: flagged.filter((r) => r.Severity === 'High').length,\n    coverage: rows.length ? Math.round((tested / rows.length) * 100) : 0,\n    sections,\n  };\n}\n\nfunction parseTickers(text, max) {\n  const limit = max || MAX_TICKERS;\n  const seen = new Set();\n  String(text || '').toUpperCase().split(/[\\s,;]+/).forEach((tok) => {\n    const t = tok.replace(/[^A-Z0-9&-]/g, '');\n    if (t) seen.add(t);\n  });\n  const all = Array.from(seen);\n  return { tickers: all.slice(0, limit), dropped: all.slice(limit) };\n}\n\nfunction changeText(previous, current) {\n  if (current === null || current === undefined) return '';\n  if (previous === undefined || previous === null) return 'New';\n  const d = round1(current - previous);\n  if (Math.abs(d) < 0.5) return 'No change';\n  return d > 0 ? 'Worse (+' + d.toFixed(1) + ')' : 'Better (' + d.toFixed(1) + ')';\n}\n\n\nconst meta = $('Parse tickers').item.json;\nconst fail = (msg) => ({ json: { ticker: meta.ticker, error: msg + ' (' + meta.mode + ')' } });\nif (meta.error) return fail(meta.error);\nconst html = String($('Fetch screener page').item.json.data || '');\n// A real company page is 100KB+; a tiny reply is almost always screener.in throttling (HTTP 429).\nif (html.length < 5000) return fail('screener.in sent back a page too small to be a company page, usually throttling (HTTP 429). Wait a few minutes and run fewer tickers at a time.');\n// A failed or blocked extra call leaves that source null, so its checks show \"Not tested\".\nconst grab = (name) => { try { const d = $(name).item.json.data; return typeof d === 'string' ? d : null; } catch (e) { return null; } };\nlet out;\ntry {\n  out = runChecks(html, { pe: grab('Fetch P/E history'), price: grab('Fetch price history'), peers: grab('Fetch peers'), pledge: grab('Fetch promoter pledge') });\n} catch (e) {\n  return fail('Unexpected page layout: ' + e.message);\n}\n// Some companies have no consolidated history on screener.in (a thin table or none at all); standalone has the full record.\nif (out.error) return fail(out.error + (meta.mode === 'consolidated' && /^(Could not find|Not enough annual|This looks like a bank)/.test(out.error) ? ' If the company is not a bank and its consolidated accounts are missing or short, retry it with Standalone.' : ''));\nreturn { json: Object.assign({ ticker: meta.ticker, company: out.company, latestYear: out.latestYear, rows: out.rows }, scoreRows(out.rows)) };"
+      },
+      "id": "rf3-0009",
+      "name": "Run checks and score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// V3: weighted risk score, ticker list parsing and run-to-run change. Pure functions, no dependencies.\nconst WEIGHT = { High: 3, Medium: 2, Low: 1 };\n// Band cut-offs (share of tested weight that is flagged), fitted 2026-10-25 on 29 companies labelled\n// good/moderate/bad in advance. Provisional: 19 of 29 matched vs 11 of 29 for the earlier 15/30/50.\nconst BANDS = [[10, 'Low'], [17.5, 'Moderate'], [30, 'High']];\nconst MAX_TICKERS = 10;\n\nconst round1 = (x) => Math.round(x * 10) / 10;\n\nfunction pctFlagged(rows) {\n  const tested = rows.filter((r) => r.Status === 'FLAG' || r.Status === 'OK');\n  const total = tested.reduce((s, r) => s + (WEIGHT[r.Severity] || 1), 0);\n  if (!total) return null;\n  const flagged = tested.filter((r) => r.Status === 'FLAG').reduce((s, r) => s + (WEIGHT[r.Severity] || 1), 0);\n  return round1((flagged / total) * 100);\n}\n\nfunction bandFor(score) {\n  if (score === null) return 'Unrated';\n  const hit = BANDS.find(([limit]) => score < limit);\n  return hit ? hit[1] : 'Very high';\n}\n\n// rows: check rows with Status, Severity, Section (no SUMMARY row).\nfunction scoreRows(rows) {\n  const score = pctFlagged(rows);\n  const sections = {};\n  rows.forEach((r) => { if (!(r.Section in sections)) sections[r.Section] = pctFlagged(rows.filter((x) => x.Section === r.Section)); });\n  const flagged = rows.filter((r) => r.Status === 'FLAG');\n  const tested = rows.filter((r) => r.Status !== 'Not tested').length;\n  return {\n    score,\n    band: bandFor(score),\n    flags: flagged.length,\n    highFlags: flagged.filter((r) => r.Severity === 'High').length,\n    coverage: rows.length ? Math.round((tested / rows.length) * 100) : 0,\n    sections,\n  };\n}\n\nfunction parseTickers(text, max) {\n  const limit = max || MAX_TICKERS;\n  const seen = new Set();\n  String(text || '').toUpperCase().split(/[\\s,;]+/).forEach((tok) => {\n    const t = tok.replace(/[^A-Z0-9&-]/g, '');\n    if (t) seen.add(t);\n  });\n  const all = Array.from(seen);\n  return { tickers: all.slice(0, limit), dropped: all.slice(limit) };\n}\n\nfunction changeText(previous, current) {\n  if (current === null || current === undefined) return '';\n  if (previous === undefined || previous === null) return 'New';\n  const d = round1(current - previous);\n  if (Math.abs(d) < 0.5) return 'No change';\n  return d > 0 ? 'Worse (+' + d.toFixed(1) + ')' : 'Better (' + d.toFixed(1) + ')';\n}\n\n// V3: multi-sheet variant of xlsx-writer.js. Same hand-built OOXML, but each sheet brings its own columns.\n// Builds the OOXML parts by hand and packs them into a ZIP using stored (uncompressed) entries.\nconst DETAIL_COLUMNS = [\n  { key: 'Status', title: 'Status', min: 11, max: 13 },\n  { key: 'Severity', title: 'Severity', min: 10, max: 12 },\n  { key: 'Section', title: 'Section', min: 14, max: 34 },\n  { key: 'Check', title: 'Check', min: 30, max: 58 },\n  { key: 'Evidence', title: 'Evidence', min: 30, max: 80 },\n];\nconst RANKING_COLUMNS = [\n  { key: 'Rank', title: 'Rank', min: 6, max: 8 },\n  { key: 'Ticker', title: 'Ticker', min: 10, max: 16 },\n  { key: 'Company', title: 'Company', min: 18, max: 34 },\n  { key: 'Score', title: 'Risk score (0-100)', min: 12, max: 14 },\n  { key: 'Band', title: 'Band', min: 11, max: 13 },\n  { key: 'Flags', title: 'Flags', min: 7, max: 9 },\n  { key: 'HighFlags', title: 'High-severity flags', min: 12, max: 14 },\n  { key: 'Coverage', title: 'Checks tested %', min: 12, max: 14 },\n  { key: 'Change', title: 'Change vs last run', min: 16, max: 20 },\n  { key: 'TopFlags', title: 'Top flagged checks', min: 40, max: 90 },\n];\nconst LINE_HEIGHT = 15;\n\n// cellXfs index per row kind: [normal cell, status cell]\nconst STYLE = { header: 1, summary: 2, FLAG: [3, 4], OK: [5, 6], 'Not tested': [7, 8], AMBER: [9, 10] };\n\nconst STYLES_XML =\n  '<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>' +\n  '<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">' +\n  '<fonts count=\"6\">' +\n  '<font><sz val=\"11\"/><name val=\"Calibri\"/></font>' +\n  '<font><b/><sz val=\"11\"/><color rgb=\"FFFFFFFF\"/><name val=\"Calibri\"/></font>' +\n  '<font><b/><sz val=\"11\"/><name val=\"Calibri\"/></font>' +\n  '<font><b/><sz val=\"11\"/><color rgb=\"FF9C0006\"/><name val=\"Calibri\"/></font>' +\n  '<font><b/><sz val=\"11\"/><color rgb=\"FF006100\"/><name val=\"Calibri\"/></font>' +\n  '<font><b/><sz val=\"11\"/><color rgb=\"FF595959\"/><name val=\"Calibri\"/></font>' +\n  '</fonts>' +\n  '<fills count=\"8\">' +\n  '<fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill>' +\n  '<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF1F3864\"/></patternFill></fill>' +\n  '<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFD9E1F2\"/></patternFill></fill>' +\n  '<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFFFC7CE\"/></patternFill></fill>' +\n  '<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFC6EFCE\"/></patternFill></fill>' +\n  '<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFEDEDED\"/></patternFill></fill>' +\n  '<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FFFFEB9C\"/></patternFill></fill>' +\n  '</fills>' +\n  '<borders count=\"2\"><border><left/><right/><top/><bottom/><diagonal/></border>' +\n  '<border><left style=\"thin\"><color rgb=\"FFBFBFBF\"/></left><right style=\"thin\"><color rgb=\"FFBFBFBF\"/></right>' +\n  '<top style=\"thin\"><color rgb=\"FFBFBFBF\"/></top><bottom style=\"thin\"><color rgb=\"FFBFBFBF\"/></bottom><diagonal/></border></borders>' +\n  '<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>' +\n  '<cellXfs count=\"11\">' +\n  '<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>' +\n  '<xf numFmtId=\"0\" fontId=\"1\" fillId=\"2\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\"><alignment horizontal=\"center\" vertical=\"center\" wrapText=\"1\"/></xf>' +\n  '<xf numFmtId=\"0\" fontId=\"2\" fillId=\"3\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf>' +\n  '<xf numFmtId=\"0\" fontId=\"0\" fillId=\"4\" borderId=\"1\" xfId=\"0\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf>' +\n  '<xf numFmtId=\"0\" fontId=\"3\" fillId=\"4\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\"><alignment horizontal=\"center\" vertical=\"top\"/></xf>' +\n  '<xf numFmtId=\"0\" fontId=\"0\" fillId=\"5\" borderId=\"1\" xfId=\"0\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf>' +\n  '<xf numFmtId=\"0\" fontId=\"4\" fillId=\"5\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\"><alignment horizontal=\"center\" vertical=\"top\"/></xf>' +\n  '<xf numFmtId=\"0\" fontId=\"0\" fillId=\"6\" borderId=\"1\" xfId=\"0\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf>' +\n  '<xf numFmtId=\"0\" fontId=\"5\" fillId=\"6\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\"><alignment horizontal=\"center\" vertical=\"top\"/></xf>' +\n  '<xf numFmtId=\"0\" fontId=\"0\" fillId=\"7\" borderId=\"1\" xfId=\"0\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf>' +\n  '<xf numFmtId=\"0\" fontId=\"2\" fillId=\"7\" borderId=\"1\" xfId=\"0\" applyFont=\"1\" applyFill=\"1\" applyBorder=\"1\" applyAlignment=\"1\"><alignment horizontal=\"center\" vertical=\"top\"/></xf>' +\n  '</cellXfs>' +\n  '<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\"/></cellStyles>' +\n  '</styleSheet>';\n\nfunction esc(v) {\n  return String(v == null ? '' : v)\n    .replace(/[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]/g, '')\n    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n}\n\nfunction colWidths(rows, COLUMNS) {\n  return COLUMNS.map((c) => {\n    const longest = rows.filter((r) => r.Status !== 'SUMMARY').reduce((m, r) => Math.max(m, String(r[c.key] == null ? '' : r[c.key]).length), c.title.length);\n    return Math.max(c.min, Math.min(c.max, longest + 2));\n  });\n}\n\n// kindOf(row) picks the colour family: FLAG, OK, 'Not tested', AMBER or SUMMARY.\nfunction sheetXml(rows, COLUMNS, kindOf) {\n  const widths = colWidths(rows, COLUMNS);\n  const letters = 'ABCDEFGHIJKL';\n  const cell = (ci, ri, val, style) =>\n    typeof val === 'number' && Number.isFinite(val)\n      ? '<c r=\"' + letters[ci] + ri + '\" s=\"' + style + '\"><v>' + val + '</v></c>'\n      : '<c r=\"' + letters[ci] + ri + '\" s=\"' + style + '\" t=\"inlineStr\"><is><t xml:space=\"preserve\">' + esc(val) + '</t></is></c>';\n  const rowXml = (ri, cells, lines) =>\n    '<row r=\"' + ri + '\" ht=\"' + Math.max(1, lines) * LINE_HEIGHT + '\" customHeight=\"1\">' + cells.join('') + '</row>';\n  const linesFor = (r) => COLUMNS.reduce((m, c, i) => Math.max(m, Math.ceil(String(r[c.key] == null ? '' : r[c.key]).length / (widths[i] - 1))), 1);\n\n  const out = [rowXml(1, COLUMNS.map((c, i) => cell(i, 1, c.title, STYLE.header)), 2)];\n  rows.forEach((r, idx) => {\n    const ri = idx + 2;\n    const kind = kindOf(r);\n    const isSummary = kind === 'SUMMARY';\n    const pair = STYLE[kind];\n    const cells = COLUMNS.map((c, i) => cell(i, ri, r[c.key], isSummary ? STYLE.summary : (i === 0 ? pair[1] : pair[0])));\n    out.push(rowXml(ri, cells, linesFor(r)));\n  });\n  const lastRow = rows.length + 1;\n  return '<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>' +\n    '<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">' +\n    '<sheetPr><pageSetUpPr fitToPage=\"1\"/></sheetPr>' +\n    '<sheetViews><sheetView workbookViewId=\"0\" showGridLines=\"0\"><pane ySplit=\"1\" topLeftCell=\"A2\" activePane=\"bottomLeft\" state=\"frozen\"/></sheetView></sheetViews>' +\n    '<sheetFormatPr defaultRowHeight=\"15\"/>' +\n    '<cols>' + widths.map((w, i) => '<col min=\"' + (i + 1) + '\" max=\"' + (i + 1) + '\" width=\"' + w + '\" customWidth=\"1\"/>').join('') + '</cols>' +\n    '<sheetData>' + out.join('') + '</sheetData>' +\n    '<autoFilter ref=\"A1:' + letters[COLUMNS.length - 1] + lastRow + '\"/>' +\n    '<pageMargins left=\"0.5\" right=\"0.5\" top=\"0.6\" bottom=\"0.6\" header=\"0.3\" footer=\"0.3\"/>' +\n    '<pageSetup orientation=\"landscape\" fitToWidth=\"1\" fitToHeight=\"0\"/>' +\n    '</worksheet>';\n}\n\nconst CRC_TABLE = (() => {\n  const t = [];\n  for (let n = 0; n < 256; n++) {\n    let c = n;\n    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;\n    t.push(c >>> 0);\n  }\n  return t;\n})();\n\nfunction crc32(buf) {\n  let c = 0xffffffff;\n  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);\n  return (c ^ 0xffffffff) >>> 0;\n}\n\nfunction zipStored(files) {\n  const locals = [];\n  const centrals = [];\n  let offset = 0;\n  files.forEach((f) => {\n    const name = Buffer.from(f.name, 'utf8');\n    const data = Buffer.from(f.data, 'utf8');\n    const crc = crc32(data);\n    const lh = Buffer.alloc(30);\n    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(0x0800, 6);\n    lh.writeUInt32LE(crc, 14); lh.writeUInt32LE(data.length, 18); lh.writeUInt32LE(data.length, 22);\n    lh.writeUInt16LE(name.length, 26);\n    locals.push(lh, name, data);\n    const ch = Buffer.alloc(46);\n    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt16LE(0x0800, 8);\n    ch.writeUInt32LE(crc, 16); ch.writeUInt32LE(data.length, 20); ch.writeUInt32LE(data.length, 24);\n    ch.writeUInt16LE(name.length, 28); ch.writeUInt32LE(offset, 42);\n    centrals.push(ch, name);\n    offset += 30 + name.length + data.length;\n  });\n  const cd = Buffer.concat(centrals);\n  const end = Buffer.alloc(22);\n  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10);\n  end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16);\n  return Buffer.concat(locals.concat([cd, end]));\n}\n\nconst SHEET_KIND = {\n  detail: (r) => (r.Status === 'SUMMARY' ? 'SUMMARY' : r.Status),\n  ranking: (r) => ({ Low: 'OK', Moderate: 'AMBER', High: 'FLAG', 'Very high': 'FLAG' }[r.Band] || 'Not tested'),\n};\nconst safeSheetName = (name, used) => {\n  const base = String(name).replace(/[\\[\\]:*?\\/\\\\]/g, '').slice(0, 31) || 'Sheet';\n  let out = base, k = 2;\n  while (used.has(out.toLowerCase())) out = base.slice(0, 28) + ' ' + k++;\n  used.add(out.toLowerCase());\n  return out;\n};\n\n// sheets: [{ name, type: 'ranking' | 'detail', rows }]. Ranking rows use RANKING_COLUMNS keys; detail rows are check rows with a SUMMARY row first.\nfunction buildXlsx(sheets) {\n  const xml = '<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>';\n  const used = new Set();\n  const named = sheets.map((sh) => Object.assign({}, sh, { name: safeSheetName(sh.name, used) }));\n  const n = (i) => i + 1;\n  const ct = 'application/vnd.openxmlformats-officedocument.spreadsheetml.';\n  const rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/';\n  return zipStored([\n    { name: '[Content_Types].xml', data: xml + '<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"' + ct + 'sheet.main+xml\"/>' + named.map((_, i) => '<Override PartName=\"/xl/worksheets/sheet' + n(i) + '.xml\" ContentType=\"' + ct + 'worksheet+xml\"/>').join('') + '<Override PartName=\"/xl/styles.xml\" ContentType=\"' + ct + 'styles+xml\"/></Types>' },\n    { name: '_rels/.rels', data: xml + '<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"' + rel + 'officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>' },\n    { name: 'xl/workbook.xml', data: xml + '<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"' + rel.slice(0, -1) + '\"><sheets>' + named.map((sh, i) => '<sheet name=\"' + esc(sh.name) + '\" sheetId=\"' + n(i) + '\" r:id=\"rId' + n(i) + '\"/>').join('') + '</sheets></workbook>' },\n    { name: 'xl/_rels/workbook.xml.rels', data: xml + '<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">' + named.map((_, i) => '<Relationship Id=\"rId' + n(i) + '\" Type=\"' + rel + 'worksheet\" Target=\"worksheets/sheet' + n(i) + '.xml\"/>').join('') + '<Relationship Id=\"rId' + (named.length + 1) + '\" Type=\"' + rel + 'styles\" Target=\"styles.xml\"/></Relationships>' },\n    { name: 'xl/styles.xml', data: STYLES_XML },\n  ].concat(named.map((sh, i) => ({\n    name: 'xl/worksheets/sheet' + n(i) + '.xml',\n    data: sheetXml(sh.rows, sh.type === 'ranking' ? RANKING_COLUMNS : DETAIL_COLUMNS, SHEET_KIND[sh.type]),\n  }))));\n}\n\n\nconst items = $input.all().map((i) => i.json);\nconst meta = $('Parse tickers').first().json;\nconst store = $getWorkflowStaticData('global');\nstore.scores = store.scores || {};\n\nconst topFlags = (rows) => rows.filter((r) => r.Status === 'FLAG').slice(0, 3).map((r) => r.Check.slice(0, 60)).join('; ') || 'None';\nconst ranked = items.filter((r) => !r.error).sort((a, b) => (b.score === null) - (a.score === null) || b.score - a.score || b.highFlags - a.highFlags);\nconst failed = items.filter((r) => r.error);\n\nconst rankingRows = ranked.map((r, i) => ({\n  Rank: i + 1, Ticker: r.ticker, Company: r.company, Score: r.score === null ? '' : r.score, Band: r.band, Flags: r.flags, HighFlags: r.highFlags,\n  Coverage: r.coverage, Change: changeText(store.scores[r.ticker], r.score), TopFlags: topFlags(r.rows),\n})).concat(failed.map((r) => ({ Rank: '', Ticker: r.ticker, Company: '', Score: '', Band: 'Unrated', Flags: '', HighFlags: '', Coverage: '', Change: '', TopFlags: r.error })))\n  .concat((meta.dropped || []).map((t) => ({ Rank: '', Ticker: t, Company: '', Score: '', Band: 'Unrated', Flags: '', HighFlags: '', Coverage: '', Change: '', TopFlags: 'Skipped: over the ' + MAX_TICKERS + '-ticker limit, run it separately' })));\n\nconst note = {\n  Status: 'SUMMARY', Severity: '', Section: '', Check: 'How to read the score', Evidence: 'Score = share of tested checks flagged, weighted High 3, Medium 2, Low 1. Bands: under 10 Low, 10-17.5 Moderate, 17.5-30 High, 30+ Very high. Cut-offs are provisional, fitted on about 30 companies I labelled good, moderate or bad beforehand; the score separates clean from stressed companies better than it separates good from moderate. A flag means look closer, not that the company is bad. Source: screener.in. Not investment advice.',\n};\nconst detailSheets = ranked.map((r) => ({\n  name: r.ticker, type: 'detail',\n  rows: [{ Status: 'SUMMARY', Severity: '', Section: '', Check: r.company + ', latest year ' + r.latestYear + ': risk score ' + (r.score === null ? 'n/a' : r.score) + ' (' + r.band + '), ' + r.flags + ' flagged, ' + r.coverage + '% of checks tested', Evidence: 'Section scores: ' + Object.keys(r.sections).map((k) => k + ' ' + (r.sections[k] === null ? 'n/a' : r.sections[k])).join(', ') }].concat(r.rows),\n}));\nconst sheets = [{ name: 'Ranking', type: 'ranking', rows: rankingRows }].concat(detailSheets);\n\nranked.forEach((r) => { if (r.score !== null) store.scores[r.ticker] = r.score; });\n\nconst buf = buildXlsx(sheets);\nconst fileName = 'red-flag-watchlist-' + new Date().toISOString().slice(0, 10) + '.xlsx';\nconst mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';\nreturn [{ json: { fileName, tickers: ranked.length, failed: failed.length }, binary: { data: await this.helpers.prepareBinaryData(buf, fileName, mime) } }];"
+      },
+      "id": "rf3-0010",
+      "name": "Build workbook",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Your red-flag watchlist is ready",
+        "respondWith": "returnBinary",
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "id": "rf3-0011",
+      "name": "Download Excel",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        0
+      ],
+      "webhookId": "c2d4e6f8-0311-4a00-8000-0000000000cc"
+    }
+  ],
+  "connections": {
+    "Watchlist form": {
+      "main": [
+        [
+          {
+            "node": "Parse tickers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse tickers": {
+      "main": [
+        [
+          {
+            "node": "Fetch screener page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch screener page": {
+      "main": [
+        [
+          {
+            "node": "Prepare extras",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare extras": {
+      "main": [
+        [
+          {
+            "node": "Fetch P/E history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch P/E history": {
+      "main": [
+        [
+          {
+            "node": "Fetch price history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch price history": {
+      "main": [
+        [
+          {
+            "node": "Fetch peers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch peers": {
+      "main": [
+        [
+          {
+            "node": "Fetch promoter pledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch promoter pledge": {
+      "main": [
+        [
+          {
+            "node": "Run checks and score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run checks and score": {
+      "main": [
+        [
+          {
+            "node": "Build workbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build workbook": {
+      "main": [
+        [
+          {
+            "node": "Download Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
