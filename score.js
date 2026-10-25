@@ -1,7 +1,7 @@
 // V3: weighted risk score, ticker list parsing and run-to-run change. Pure functions, no dependencies.
 const WEIGHT = { High: 3, Medium: 2, Low: 1 };
-// Band cut-offs (share of tested weight that is flagged), fitted 2026-10-25 on 29 companies labelled
-// good/moderate/bad in advance. Provisional: 19 of 29 matched vs 11 of 29 for the earlier 15/30/50.
+// Band cut-offs (share of tested weight that is flagged), set from 33 companies labelled good/moderate/bad
+// in advance (see calibration-*.json). Provisional: 22 of 33 land in the band that matches their label.
 const BANDS = [[10, 'Low'], [17.5, 'Moderate'], [30, 'High']];
 const MAX_TICKERS = 10;
 

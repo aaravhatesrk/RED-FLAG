@@ -1,6 +1,6 @@
-# Red-flag screener (n8n), V3
+# Red-flag screener (n8n)
 
-Paste up to 10 NSE/BSE tickers. This n8n workflow pulls 12 years of statements, 12 quarters and the shareholding pattern
+V3 continues V2: the same 61 checks, now for a whole watchlist with a risk score. Paste up to 10 NSE/BSE tickers. This n8n workflow pulls 12 years of statements, 12 quarters and the shareholding pattern
 for each company from screener.in, runs 61 checks (earnings quality, cash flow, working capital, leverage, returns,
 margins, ownership, valuation and the latest quarter), turns the result into a 0 to 100 risk score, and downloads one
 Excel file. Every check is marked FLAG, OK or Not tested, with the numbers behind it.
@@ -10,7 +10,7 @@ Excel file. Every check is marked FLAG, OK or Not tested, with the numbers behin
 A flag means "look here first", not "this company is bad". The chart shows how the score bands were set: 33 companies
 I labelled good, moderate or bad before scoring (see Calibration below).
 
-## What V3 gives you
+## What V3 adds to V2
 - **Watchlist mode**: up to 10 tickers per run (commas, spaces or new lines). It runs one company at a time with pauses, about 20 seconds each.
 - **Risk score (0-100)**: the share of tested checks that are flagged, weighted High 3, Medium 2, Low 1. Checks that cannot be tested are left out and shown as "Checks tested %".
 - **Bands**: under 10 Low, 10 to 17.5 Moderate, 17.5 to 30 High, 30+ Very high. Provisional, see Calibration.
@@ -40,7 +40,7 @@ chart API), and peer P/E (screener.in peers API). If a source is down or blocked
 I picked 33 non-financial companies and labelled each good, moderate or bad before scoring anything
 (`calibration-labels.json`, `calibration-labels-2.json`), then scored them with `node calibrate.js` (results in
 `calibration-results*.json`). Median scores: good 8.7, moderate 12.5, bad 21.7.
-- The earlier 15/30/50 bands matched my labels on 14 of 33. The 10 / 17.5 / 30 bands match 22 of 33.
+- The bands (under 10 Low, 10 to 17.5 Moderate, 17.5 to 30 High, 30+ Very high) were set from these results, and 22 of 33 companies land in the band that matches their label.
 - A score of 17.5 or more flags 10 of the 11 bad companies and falsely alarms on 4 of the 22 others (Titan, Bajaj Auto, BHEL, Ashok Leyland).
 - "Moderate" does not separate cleanly from "good": the score works better as clean versus stressed than as three buckets.
 - Small sample, cut-offs fitted to it, labels are my own judgment. Treat the bands as provisional. IOC and Vodafone Idea were left out because I had already used them while building.
@@ -66,8 +66,9 @@ I picked 33 non-financial companies and labelled each good, moderate or bad befo
 - `calibrate.js`, `calibration-*.json`: the labelled test set, the scoring script and its results.
 - `run-test.js`: run the checks against live pages from the command line (`node run-test.js IOC IDEA`).
 
-## Earlier versions
-- **V2** (`red-flag-screener-v2.n8n.json`, `build_workflow.py`): one ticker per run, 61 checks, single-sheet Excel report. Example reports in `examples/` (`IOC-report.xlsx`, `VodafoneIdea-report.xlsx`) use this format.
-- **V1** (`red-flag-screener-v1.n8n.json`): the original 44 annual checks.
+## Version history
+- **V1**: 44 annual checks, one ticker per run (`red-flag-screener-v1.n8n.json`).
+- **V2**: 61 checks (adds ownership, valuation and latest-quarter checks), one ticker per run, single-sheet Excel (`red-flag-screener-v2.n8n.json`, `build_workflow.py`). Example reports in `examples/` (`IOC-report.xlsx`, `VodafoneIdea-report.xlsx`) use this format.
+- **V3 (current)**: the same 61 checks plus watchlist mode, the risk score, the calibrated bands and the multi-sheet report (`red-flag-screener-v3.n8n.json`).
 
 Built by Aarav, a Class 12 student learning finance and automation. MIT licensed.

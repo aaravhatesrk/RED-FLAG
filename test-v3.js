@@ -26,7 +26,7 @@ t('no tested checks gives null score and band Unrated', () => {
   assert.strictEqual(r.band, 'Unrated');
 });
 
-t('band edges (calibrated on 29 companies): 9.9 Low, 10 Moderate, 17.5 High, 30 Very high', () => {
+t('band edges (calibrated on 33 companies): 9.9 Low, 10 Moderate, 17.5 High, 30 Very high', () => {
   const mk = (flagged, ok) => scoreRows([].concat(Array(flagged).fill(row('FLAG', 'Low', 'A')), Array(ok).fill(row('OK', 'Low', 'A'))));
   assert.strictEqual(mk(99, 901).band, 'Low');
   assert.strictEqual(mk(10, 90).band, 'Moderate');
